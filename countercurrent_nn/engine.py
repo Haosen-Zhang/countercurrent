@@ -1,0 +1,307 @@
+"""Training, evaluation, and diagnostic collection."""
+
+from __future__ import annotations
+
+import inspect
+import math
+import time
+from collections.abc import Iterable, Mapping
+from typing import Any
+
+import torch
+from torch import Tensor, nn
+
+from .utils import top1_correct
+
+
+def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.Optimizer:
+    name = str(config.get("optimizer", "sgd")).lower()
+    lr = float(config.get("lr", 0.1))
+    weight_decay = float(config.get("weight_decay", 5e-4))
+    if name == "sgd":
+        return torch.optim.SGD(
+            model.parameters(),
+            lr=lr,
+            momentum=float(config.get("momentum", 0.9)),
+            weight_decay=weight_decay,
+        )
+    if name == "adamw":
+        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    raise ValueError(f"optimizer must be 'sgd' or 'adamw', got {name!r}")
+
+
+def cosine_warmup_lr(
+    base_lr: float,
+    step: int,
+    total_steps: int,
+    warmup_steps: int,
+) -> float:
+    if warmup_steps > 0 and step < warmup_steps:
+        return base_lr * float(step + 1) / warmup_steps
+    decay_steps = max(total_steps - warmup_steps, 1)
+    progress = min(max((step - warmup_steps) / decay_steps, 0.0), 1.0)
+    return base_lr * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def _set_lr(optimizer: torch.optim.Optimizer, learning_rate: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = learning_rate
+
+
+def train_one_epoch(
+    model: nn.Module,
+    loader: Iterable[tuple[Tensor, Tensor]],
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    device: torch.device,
+    *,
+    global_step: int,
+    total_steps: int,
+    warmup_steps: int,
+    base_lr: float,
+    amp: bool = False,
+    limit_batches: int | None = None,
+) -> tuple[dict[str, float], int]:
+    model.train()
+    amp_enabled = amp and device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
+    total_loss = 0.0
+    total_correct = 0
+    total_examples = 0
+    start = time.perf_counter()
+    last_lr = base_lr
+
+    for batch_index, (images, targets) in enumerate(loader):
+        if limit_batches is not None and batch_index >= limit_batches:
+            break
+        images = images.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+        last_lr = cosine_warmup_lr(base_lr, global_step, total_steps, warmup_steps)
+        _set_lr(optimizer, last_lr)
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(
+            device_type=device.type,
+            dtype=torch.float16,
+            enabled=amp_enabled,
+        ):
+            logits = model(images)
+            loss = criterion(logits, targets)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        batch_size = targets.shape[0]
+        total_loss += float(loss.detach().item()) * batch_size
+        total_correct += top1_correct(logits.detach(), targets)
+        total_examples += batch_size
+        global_step += 1
+
+    if total_examples == 0:
+        raise RuntimeError("training loader yielded no batches")
+    elapsed = time.perf_counter() - start
+    metrics = {
+        "loss": total_loss / total_examples,
+        "accuracy": total_correct / total_examples,
+        "examples": float(total_examples),
+        "seconds": elapsed,
+        "examples_per_second": total_examples / max(elapsed, 1e-12),
+        "lr": last_lr,
+    }
+    return metrics, global_step
+
+
+@torch.inference_mode()
+def evaluate(
+    model: nn.Module,
+    loader: Iterable[tuple[Tensor, Tensor]],
+    criterion: nn.Module,
+    device: torch.device,
+    *,
+    limit_batches: int | None = None,
+    forward_kwargs: Mapping[str, Any] | None = None,
+) -> dict[str, float]:
+    model.eval()
+    total_loss = 0.0
+    total_correct = 0
+    total_examples = 0
+    start = time.perf_counter()
+    for batch_index, (images, targets) in enumerate(loader):
+        if limit_batches is not None and batch_index >= limit_batches:
+            break
+        images = images.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+        logits = model(images, **dict(forward_kwargs or {}))
+        loss = criterion(logits, targets)
+        batch_size = targets.shape[0]
+        total_loss += float(loss.item()) * batch_size
+        total_correct += top1_correct(logits, targets)
+        total_examples += batch_size
+    if total_examples == 0:
+        raise RuntimeError("evaluation loader yielded no batches")
+    elapsed = time.perf_counter() - start
+    return {
+        "loss": total_loss / total_examples,
+        "accuracy": total_correct / total_examples,
+        "examples": float(total_examples),
+        "seconds": elapsed,
+        "examples_per_second": total_examples / max(elapsed, 1e-12),
+    }
+
+
+@torch.inference_mode()
+def evaluate_refinement(
+    model: nn.Module,
+    loader: Iterable[tuple[Tensor, Tensor]],
+    device: torch.device,
+    *,
+    limit_batches: int | None = None,
+    error_amplification_delta: float = 0.1,
+    reverse_off: bool = False,
+) -> dict[str, Any]:
+    """Evaluate per-iteration predictions and confirmation-bias diagnostics."""
+    predictor = getattr(model, "predict_iterations", None)
+    if not callable(predictor):
+        return {}
+    model.eval()
+    correct: Tensor | None = None
+    confidence: Tensor | None = None
+    entropy: Tensor | None = None
+    total_examples = 0
+    initial_wrong = 0
+    corrected = 0
+    amplified = 0
+    predictor_parameters = inspect.signature(predictor).parameters
+
+    for batch_index, (images, targets) in enumerate(loader):
+        if limit_batches is not None and batch_index >= limit_batches:
+            break
+        images = images.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+        kwargs = {"reverse_off": reverse_off} if "reverse_off" in predictor_parameters else {}
+        logits = predictor(images, **kwargs)
+        probabilities = logits.softmax(dim=-1)
+        predictions = logits.argmax(dim=-1)
+        batch_correct = predictions.eq(targets.unsqueeze(0)).sum(dim=1).cpu()
+        batch_confidence = probabilities.max(dim=-1).values.sum(dim=1).cpu()
+        batch_entropy = -(
+            probabilities * probabilities.clamp_min(1e-12).log()
+        ).sum(dim=-1).sum(dim=1).cpu()
+        correct = batch_correct if correct is None else correct + batch_correct
+        confidence = (
+            batch_confidence if confidence is None else confidence + batch_confidence
+        )
+        entropy = batch_entropy if entropy is None else entropy + batch_entropy
+
+        wrong_mask = predictions[0].ne(targets)
+        initial_classes = predictions[0]
+        initial_class_probability = probabilities[0].gather(
+            1, initial_classes[:, None]
+        ).squeeze(1)
+        final_initial_class_probability = probabilities[-1].gather(
+            1, initial_classes[:, None]
+        ).squeeze(1)
+        initial_wrong += int(wrong_mask.sum().item())
+        corrected += int((wrong_mask & predictions[-1].eq(targets)).sum().item())
+        amplified += int(
+            (
+                wrong_mask
+                & (
+                    final_initial_class_probability
+                    > initial_class_probability + error_amplification_delta
+                )
+            ).sum().item()
+        )
+        total_examples += targets.shape[0]
+
+    if total_examples == 0 or correct is None or confidence is None or entropy is None:
+        raise RuntimeError("evaluation loader yielded no batches")
+    return {
+        "iteration_accuracy": (correct.float() / total_examples).tolist(),
+        "iteration_confidence": (confidence / total_examples).tolist(),
+        "iteration_entropy": (entropy / total_examples).tolist(),
+        "initial_wrong_examples": initial_wrong,
+        "error_correction_rate": corrected / initial_wrong if initial_wrong else 0.0,
+        "error_amplification_rate": amplified / initial_wrong if initial_wrong else 0.0,
+        "error_amplification_delta": error_amplification_delta,
+    }
+
+
+@torch.inference_mode()
+def collect_diagnostics(
+    model: nn.Module,
+    loader: Iterable[tuple[Tensor, Tensor]],
+    device: torch.device,
+    *,
+    max_samples: int = 16,
+    reverse_off: bool = False,
+) -> dict[str, Any]:
+    """Collect one small batch; full lattice histories intentionally stay opt-in."""
+    if "return_diagnostics" not in inspect.signature(model.forward).parameters:
+        return {}
+    model.eval()
+    images, targets = next(iter(loader))
+    images = images[:max_samples].to(device)
+    targets = targets[:max_samples]
+    parameters = inspect.signature(model.forward).parameters
+    kwargs: dict[str, Any] = {"return_diagnostics": True}
+    if "reverse_off" in parameters:
+        kwargs["reverse_off"] = reverse_off
+    result = model(images, **kwargs)
+    if not isinstance(result, tuple):
+        return {}
+    logits, diagnostics = result
+    diagnostics = dict(diagnostics)
+    diagnostics["targets"] = targets.detach().cpu()
+    diagnostics["final_logits"] = logits.detach().cpu()
+    return diagnostics
+
+
+def summarize_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    if not diagnostics:
+        return {}
+    summary: dict[str, Any] = {}
+    for key in (
+        "H_norm",
+        "C_norm",
+        "q_norm",
+        "discrepancy",
+        "exchange_energy",
+        "residual",
+        "gamma",
+    ):
+        value = diagnostics.get(key)
+        if isinstance(value, Tensor):
+            summary[key] = value.tolist()
+
+    logits = diagnostics.get("iter_logits")
+    targets = diagnostics.get("targets")
+    if isinstance(logits, Tensor) and isinstance(targets, Tensor):
+        probabilities = logits.softmax(dim=-1)
+        predictions = probabilities.argmax(dim=-1)
+        summary["iteration_accuracy"] = (
+            predictions.eq(targets.unsqueeze(0)).float().mean(dim=1).tolist()
+        )
+        summary["iteration_confidence"] = probabilities.max(dim=-1).values.mean(dim=1).tolist()
+        entropy = -(probabilities * probabilities.clamp_min(1e-12).log()).sum(dim=-1)
+        summary["iteration_entropy"] = entropy.mean(dim=1).tolist()
+        initial_wrong = predictions[0].ne(targets)
+        initial_classes = predictions[0]
+        initial_probability = probabilities[0].gather(
+            1, initial_classes[:, None]
+        ).squeeze(1)
+        final_probability = probabilities[-1].gather(
+            1, initial_classes[:, None]
+        ).squeeze(1)
+        wrong_count = int(initial_wrong.sum().item())
+        corrected = initial_wrong & predictions[-1].eq(targets)
+        amplified = initial_wrong & (final_probability > initial_probability + 0.1)
+        summary["initial_accuracy"] = summary["iteration_accuracy"][0]
+        summary["final_accuracy"] = summary["iteration_accuracy"][-1]
+        summary["initial_wrong_examples"] = wrong_count
+        summary["error_correction_rate"] = (
+            float(corrected.sum().item()) / wrong_count if wrong_count else 0.0
+        )
+        summary["error_amplification_rate"] = (
+            float(amplified.sum().item()) / wrong_count if wrong_count else 0.0
+        )
+    return summary

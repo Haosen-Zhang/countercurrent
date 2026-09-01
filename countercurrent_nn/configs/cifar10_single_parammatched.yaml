@@ -1,0 +1,33 @@
+experiment: cifar10_single_feedforward_parammatched
+dataset:
+  name: cifar10
+  root: ./data
+  download: true
+  val_size: 5000
+  split_seed: 0
+  num_workers: 4
+  pin_memory: true
+model:
+  name: single_feedforward
+  in_channels: 3
+  channels: 64
+  depth: 8
+  num_classes: 10
+  num_groups: 8
+  residual_scale: 0.1
+training:
+  optimizer: sgd
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+  batch_size: 128
+  epochs: 200
+  warmup_epochs: 5
+  amp: false
+runtime:
+  seed: 0
+  device: auto
+  deterministic: false
+  output_dir: countercurrent_nn/results/cifar10_single_parammatched_seed0
+diagnostics:
+  max_samples: 16
