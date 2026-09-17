@@ -1,17 +1,18 @@
-"""Forward-only recurrent compute control for the two-sweep models."""
+"""Ordinary feedback-fusion control without discrepancy-driven paired flux."""
 
 from __future__ import annotations
 
 import torch
 from torch import Tensor, nn
 
+from .boundary import SelfGeneratedTargetBoundary
 from .coupled import _normalized_l2, _relative_state_change
 from .stem import Stem
 from .transport import TransportBlock
 
 
-class ForwardOnlyRecurrentCNN(nn.Module):
-    """Iteratively refine H with source re-injection and no reverse pathway."""
+class FeedbackFusionCNN(nn.Module):
+    """Use a target hypothesis and reverse sweep, but fuse it only into H."""
 
     def __init__(
         self,
@@ -23,35 +24,40 @@ class ForwardOnlyRecurrentCNN(nn.Module):
         num_classes: int = 10,
         num_groups: int = 8,
         residual_scale: float = 0.1,
+        prototype_dim: int = 64,
+        fusion_scale: float = 0.1,
         **_: object,
     ) -> None:
         super().__init__()
-        if depth <= 0 or refine_steps <= 0:
-            raise ValueError("depth and refine_steps must be positive")
+        if depth <= 0 or refine_steps <= 0 or fusion_scale <= 0:
+            raise ValueError("depth, refine_steps, and fusion_scale must be positive")
         self.depth = int(depth)
         self.refine_steps = int(refine_steps)
-        self.register_buffer("_inference_version", torch.tensor(2))
+        self.fusion_scale = float(fusion_scale)
         self.stem = Stem(in_channels, channels, num_groups)
         self.F = nn.ModuleList(
             TransportBlock(channels, num_groups, residual_scale) for _ in range(depth)
         )
-        # R supplies recurrent refinement capacity and matches the G-block compute.
-        self.R = nn.ModuleList(
+        self.G = nn.ModuleList(
             TransportBlock(channels, num_groups, residual_scale) for _ in range(depth)
         )
+        self.fusion = nn.ModuleList(
+            nn.Conv2d(channels, channels, kernel_size=1) for _ in range(depth)
+        )
         self.head = nn.Linear(channels, num_classes)
+        self.target_boundary = SelfGeneratedTargetBoundary(
+            num_classes=num_classes,
+            channels=channels,
+            prototype_dim=prototype_dim,
+        )
 
     def _classify(self, state: Tensor) -> Tensor:
         return self.head(state.mean(dim=(2, 3)))
 
-    def _initial_forward(self, source: Tensor) -> list[Tensor]:
-        states = [source]
+    def _run(self, x: Tensor, capture: bool) -> tuple[Tensor, list[Tensor], dict[str, Tensor]]:
+        states = [self.stem(x)]
         for block in self.F:
             states.append(block(states[-1]))
-        return states
-
-    def _run(self, x: Tensor, capture: bool) -> tuple[Tensor, list[Tensor], dict[str, Tensor]]:
-        states = self._initial_forward(self.stem(x))
         logits = self._classify(states[-1])
         iteration_logits = [logits]
         history: list[Tensor] = []
@@ -64,14 +70,24 @@ class ForwardOnlyRecurrentCNN(nn.Module):
             )
 
         for _ in range(self.refine_steps):
-            # Match CC/Co's proposal F + resweep F + G transport budget with
-            # proposal F + sequential F/R refinement, all in forward direction.
-            evidence = self._initial_forward(self.stem(x))
-            new_states = [evidence[0]]
+            source = self.stem(x)
+            boundary, _ = self.target_boundary(logits, source)
+            reverse: list[Tensor | None] = [None] * (self.depth + 1)
+            reverse[self.depth] = boundary
+            for position in reversed(range(self.depth)):
+                inlet = reverse[position + 1]
+                if inlet is None:
+                    raise RuntimeError("feedback reverse inlet is undefined")
+                reverse[position] = self.G[position](inlet)
+            new_states = [source]
             for position in range(self.depth):
+                c_ref = reverse[position]
+                if c_ref is None:
+                    raise RuntimeError("feedback reference is undefined")
                 proposal = self.F[position](new_states[position])
-                mixed = (proposal + states[position + 1] + evidence[position + 1]) / 3
-                new_states.append(self.R[position](mixed))
+                new_states.append(
+                    proposal + self.fusion_scale * self.fusion[position](c_ref)
+                )
             if capture:
                 residuals.append(_relative_state_change(states, new_states).detach().cpu())
             states = new_states
@@ -109,6 +125,4 @@ class ForwardOnlyRecurrentCNN(nn.Module):
         return (logits, diagnostics) if return_diagnostics else logits
 
 
-SingleStreamRecurrentCNN = ForwardOnlyRecurrentCNN
-
-__all__ = ["ForwardOnlyRecurrentCNN", "SingleStreamRecurrentCNN"]
+__all__ = ["FeedbackFusionCNN"]

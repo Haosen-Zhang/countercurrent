@@ -8,3 +8,4 @@ data/
 countercurrent_nn/results/*/
 *.pt
 *.png
+dataset/

@@ -9,6 +9,7 @@ from typing import Any
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data.distributed import DistributedSampler
 
 from .utils import seed_worker
 
@@ -59,12 +60,19 @@ def _make_loader(
     num_workers: int,
     pin_memory: bool,
     seed: int,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> DataLoader[Any]:
-    generator = torch.Generator().manual_seed(seed)
+    generator = torch.Generator().manual_seed(seed + rank)
+    sampler = (
+        DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle, seed=seed)
+        if world_size > 1 else None
+    )
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=shuffle if sampler is None else False,
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=num_workers > 0,
@@ -80,6 +88,8 @@ def build_dataloaders(
     synthetic: bool = False,
     synthetic_train_size: int = 256,
     synthetic_test_size: int = 128,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> DataBundle:
     name = str(config.get("name", "cifar10")).lower()
     if name not in CIFAR_STATS:
@@ -99,6 +109,8 @@ def build_dataloaders(
             num_workers=0,
             pin_memory=False,
             seed=seed,
+            rank=rank,
+            world_size=world_size,
         )
         test_loader = _make_loader(
             test_dataset,
@@ -159,6 +171,8 @@ def build_dataloaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
         seed=seed,
+        rank=rank,
+        world_size=world_size,
     )
     validation_loader = (
         _make_loader(

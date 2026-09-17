@@ -1,14 +1,15 @@
-experiment: cifar10_forward_recurrent
+experiment: cifar10_countercurrent_v3
 dataset:
   name: cifar10
-  root: ./data
-  download: true
+  root: dataset
+  download: false
   val_size: 5000
   split_seed: 0
   num_workers: 4
   pin_memory: true
 model:
-  name: forward_recurrent
+  name: countercurrent
+  inference_version: 2
   in_channels: 3
   channels: 64
   depth: 4
@@ -16,6 +17,11 @@ model:
   num_classes: 10
   num_groups: 8
   residual_scale: 0.1
+  boundary_type: self_generated
+  prototype_dim: 64
+  lattice_size: 8
+  conductance_max: 0.49
+  conductance_init_logit: -2.2
 training:
   optimizer: sgd
   lr: 0.1
@@ -25,10 +31,12 @@ training:
   epochs: 200
   warmup_epochs: 5
   amp: false
+  initial_loss_weight: 0.2
+  conductance_weight_decay: 0.0
 runtime:
   seed: 0
   device: auto
   deterministic: false
-  output_dir: countercurrent_nn/results/cifar10_forward_recurrent_v2_seed0
+  output_dir: countercurrent_nn/results/cifar10_countercurrent_v3_4gpu_seed0
 diagnostics:
   max_samples: 16

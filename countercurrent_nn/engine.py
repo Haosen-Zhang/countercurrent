@@ -10,23 +10,41 @@ from typing import Any
 
 import torch
 from torch import Tensor, nn
+from torch import distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 
 from .utils import top1_correct
+from .models.exchange import ChannelwiseConductance
 
 
 def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.Optimizer:
     name = str(config.get("optimizer", "sgd")).lower()
     lr = float(config.get("lr", 0.1))
     weight_decay = float(config.get("weight_decay", 5e-4))
+    parameters = list(model.parameters())
+    if "conductance_weight_decay" in config:
+        conductance_decay = float(config["conductance_weight_decay"])
+        if not math.isfinite(conductance_decay) or conductance_decay < 0:
+            raise ValueError("conductance_weight_decay must be finite and nonnegative")
+        conductance = [module.logit_gamma for module in model.modules()
+                       if isinstance(module, ChannelwiseConductance)]
+        if not conductance:
+            raise ValueError("conductance_weight_decay requires conductance parameters")
+        conductance_ids = {id(parameter) for parameter in conductance}
+        parameters = [
+            {"params": [p for p in parameters if id(p) not in conductance_ids],
+             "weight_decay": weight_decay},
+            {"params": conductance, "weight_decay": conductance_decay},
+        ]
     if name == "sgd":
         return torch.optim.SGD(
-            model.parameters(),
+            parameters,
             lr=lr,
             momentum=float(config.get("momentum", 0.9)),
             weight_decay=weight_decay,
         )
     if name == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        return torch.optim.AdamW(parameters, lr=lr, weight_decay=weight_decay)
     raise ValueError(f"optimizer must be 'sgd' or 'adamw', got {name!r}")
 
 
@@ -60,12 +78,21 @@ def train_one_epoch(
     warmup_steps: int,
     base_lr: float,
     amp: bool = False,
+    initial_loss_weight: float = 0.0,
     limit_batches: int | None = None,
 ) -> tuple[dict[str, float], int]:
+    if not math.isfinite(initial_loss_weight) or initial_loss_weight < 0:
+        raise ValueError("initial_loss_weight must be finite and nonnegative")
+    unwrapped = model.module if isinstance(model, DistributedDataParallel) else model
+    if initial_loss_weight and "return_initial_logits" not in inspect.signature(unwrapped.forward).parameters:
+        raise ValueError("initial supervision requires a model returning initial logits")
     model.train()
     amp_enabled = amp and device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
     total_loss = 0.0
+    total_final_loss = 0.0
+    total_initial_loss = 0.0
+    total_initial_correct = 0
     total_correct = 0
     total_examples = 0
     start = time.perf_counter()
@@ -84,14 +111,23 @@ def train_one_epoch(
             dtype=torch.float16,
             enabled=amp_enabled,
         ):
-            logits = model(images)
-            loss = criterion(logits, targets)
+            if initial_loss_weight:
+                logits, initial_logits = model(images, return_initial_logits=True)
+                initial_loss = criterion(initial_logits, targets)
+            else:
+                logits = model(images)
+            final_loss = criterion(logits, targets)
+            loss = final_loss + initial_loss_weight * initial_loss if initial_loss_weight else final_loss
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
 
         batch_size = targets.shape[0]
         total_loss += float(loss.detach().item()) * batch_size
+        total_final_loss += float(final_loss.detach().item()) * batch_size
+        if initial_loss_weight:
+            total_initial_loss += float(initial_loss.detach().item()) * batch_size
+            total_initial_correct += top1_correct(initial_logits.detach(), targets)
         total_correct += top1_correct(logits.detach(), targets)
         total_examples += batch_size
         global_step += 1
@@ -99,14 +135,30 @@ def train_one_epoch(
     if total_examples == 0:
         raise RuntimeError("training loader yielded no batches")
     elapsed = time.perf_counter() - start
+    if isinstance(model, DistributedDataParallel):
+        totals = torch.tensor(
+            [total_loss, total_correct, total_examples, total_final_loss,
+             total_initial_loss, total_initial_correct], dtype=torch.float64, device=device
+        )
+        dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+        (total_loss, total_correct, total_examples, total_final_loss,
+         total_initial_loss, total_initial_correct) = totals.tolist()
+        duration = torch.tensor(elapsed, dtype=torch.float64, device=device)
+        dist.all_reduce(duration, op=dist.ReduceOp.MAX)
+        elapsed = duration.item()
     metrics = {
         "loss": total_loss / total_examples,
+        "final_loss": total_final_loss / total_examples,
         "accuracy": total_correct / total_examples,
         "examples": float(total_examples),
         "seconds": elapsed,
         "examples_per_second": total_examples / max(elapsed, 1e-12),
         "lr": last_lr,
     }
+    if initial_loss_weight:
+        metrics.update(initial_loss=total_initial_loss / total_examples,
+                       initial_accuracy=total_initial_correct / total_examples,
+                       initial_loss_weight=initial_loss_weight)
     return metrics, global_step
 
 
@@ -266,6 +318,9 @@ def summarize_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
         "q_norm",
         "discrepancy",
         "exchange_energy",
+        "proposal_q_norm",
+        "proposal_discrepancy",
+        "proposal_exchange_energy",
         "residual",
         "gamma",
     ):

@@ -1,4 +1,4 @@
-experiment: cifar10_forward_recurrent
+experiment: cifar10_cocurrent_selfboundary
 dataset:
   name: cifar10
   root: ./data
@@ -8,7 +8,7 @@ dataset:
   num_workers: 4
   pin_memory: true
 model:
-  name: forward_recurrent
+  name: cocurrent
   in_channels: 3
   channels: 64
   depth: 4
@@ -16,6 +16,11 @@ model:
   num_classes: 10
   num_groups: 8
   residual_scale: 0.1
+  boundary_type: self_generated
+  prototype_dim: 64
+  lattice_size: 8
+  conductance_max: 0.49
+  conductance_init_logit: -2.2
 training:
   optimizer: sgd
   lr: 0.1
@@ -29,6 +34,6 @@ runtime:
   seed: 0
   device: auto
   deterministic: false
-  output_dir: countercurrent_nn/results/cifar10_forward_recurrent_v2_seed0
+  output_dir: countercurrent_nn/results/cifar10_cocurrent_selfboundary_seed0
 diagnostics:
   max_samples: 16

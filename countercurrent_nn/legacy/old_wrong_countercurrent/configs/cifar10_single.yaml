@@ -1,4 +1,4 @@
-experiment: cifar10_forward_recurrent
+experiment: cifar10_single_feedforward
 dataset:
   name: cifar10
   root: ./data
@@ -8,11 +8,10 @@ dataset:
   num_workers: 4
   pin_memory: true
 model:
-  name: forward_recurrent
+  name: single_feedforward
   in_channels: 3
   channels: 64
   depth: 4
-  refine_steps: 3
   num_classes: 10
   num_groups: 8
   residual_scale: 0.1
@@ -29,6 +28,6 @@ runtime:
   seed: 0
   device: auto
   deterministic: false
-  output_dir: countercurrent_nn/results/cifar10_forward_recurrent_v2_seed0
+  output_dir: countercurrent_nn/results/cifar10_single_seed0
 diagnostics:
   max_samples: 16

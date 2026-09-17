@@ -30,7 +30,6 @@ class ForwardOnlyRecurrentCNN(nn.Module):
             raise ValueError("depth and refine_steps must be positive")
         self.depth = int(depth)
         self.refine_steps = int(refine_steps)
-        self.register_buffer("_inference_version", torch.tensor(2))
         self.stem = Stem(in_channels, channels, num_groups)
         self.F = nn.ModuleList(
             TransportBlock(channels, num_groups, residual_scale) for _ in range(depth)
@@ -64,13 +63,10 @@ class ForwardOnlyRecurrentCNN(nn.Module):
             )
 
         for _ in range(self.refine_steps):
-            # Match CC/Co's proposal F + resweep F + G transport budget with
-            # proposal F + sequential F/R refinement, all in forward direction.
-            evidence = self._initial_forward(self.stem(x))
-            new_states = [evidence[0]]
+            new_states = [self.stem(x)]
             for position in range(self.depth):
                 proposal = self.F[position](new_states[position])
-                mixed = (proposal + states[position + 1] + evidence[position + 1]) / 3
+                mixed = 0.5 * (proposal + states[position + 1])
                 new_states.append(self.R[position](mixed))
             if capture:
                 residuals.append(_relative_state_change(states, new_states).detach().cpu())

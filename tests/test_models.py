@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 import yaml
@@ -18,7 +20,9 @@ from countercurrent_nn.models import (
     SelfGeneratedTargetBoundary,
     SingleStreamFeedForwardCNN,
     Stem,
+    build_model,
 )
+from countercurrent_nn.analysis.oracle_boundary import GTOracleCountercurrent
 from countercurrent_nn.profiling import count_macs
 from countercurrent_nn.utils import parameter_counts
 
@@ -270,6 +274,206 @@ class FairnessTests(unittest.TestCase):
         cc_model.pop("name")
         co_model.pop("name")
         self.assertEqual(cc_model, co_model)
+
+
+class ReciprocalInferenceRegressionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        torch.manual_seed(13)
+        self.x = torch.randn(2, 3, 32, 32)
+
+    def test_both_exchange_stages_are_paired_in_the_actual_network(self) -> None:
+        for cls in (CountercurrentCNN, CocurrentCNN):
+            model = cls(**small_kwargs()).eval()
+            _, diag = model(self.x, return_diagnostics=True)
+            for layer in range(model.depth):
+                c_index = model._reverse_reference_index(layer)
+                h_bar = diag["H_proposal"][:, layer + 1]
+                c_bar = diag["C_proposal"][:, c_index]
+                torch.testing.assert_close(
+                    diag["H_reconciled"][:, layer + 1] + diag["C_reconciled"][:, c_index],
+                    h_bar + c_bar,
+                )
+                torch.testing.assert_close(diag["proposal_D"][:, layer], h_bar - c_bar)
+                torch.testing.assert_close(
+                    diag["proposal_Q"][:, layer], model.exchange[layer].gamma * (h_bar - c_bar)
+                )
+                h_bar = diag["resweep_H_bar"][:, layer]
+                c_bar = diag["C_reconciled"][:, c_index]
+                torch.testing.assert_close(
+                    diag["H_history"][1:, layer + 1] + diag["C_history"][:, c_index],
+                    h_bar + c_bar,
+                )
+                torch.testing.assert_close(diag["D"][:, layer], h_bar - c_bar)
+                torch.testing.assert_close(
+                    diag["Q"][:, layer], model.exchange[layer].gamma * (h_bar - c_bar)
+                )
+
+    def test_corrected_reverse_state_propagates_through_the_next_g_block(self) -> None:
+        for cls in (CountercurrentCNN, CocurrentCNN):
+            model = cls(**small_kwargs()).eval()
+            source = model.stem(self.x)
+            boundary = torch.randn_like(source)
+            _, _, trace = model._refine(source, boundary, reverse_off=False)
+            if model.topology == "countercurrent":
+                pairs = [
+                    (trace["C_proposal"][position - 1], trace["C_reconciled"][position])
+                    for position in range(1, model.depth)
+                ]
+            else:
+                pairs = [
+                    (trace["C_proposal"][position + 2], trace["C_reconciled"][position + 1])
+                    for position in range(model.depth - 1)
+                ]
+            for transported, corrected_inlet in pairs:
+                gradient = torch.autograd.grad(
+                    transported.square().sum(), corrected_inlet, retain_graph=True
+                )[0]
+                self.assertGreater(gradient.abs().sum().item(), 0)
+
+    def test_version_two_checkpoint_retains_the_old_schedule(self) -> None:
+        current = CountercurrentCNN(**small_kwargs()).eval()
+        old_schedule = deepcopy(current)
+        old_schedule._inference_version.fill_(2)
+        expected = old_schedule(self.x)
+        restored = CountercurrentCNN(**small_kwargs()).eval()
+        restored.load_state_dict(old_schedule.state_dict())
+        self.assertEqual(restored._inference_version.item(), 2)
+        torch.testing.assert_close(restored(self.x), expected)
+        self.assertGreater((current(self.x) - expected).abs().max().item(), 1e-7)
+
+    def test_evidence_corrected_c_is_on_the_prediction_graph_at_every_layer(self) -> None:
+        for cls in (CountercurrentCNN, CocurrentCNN):
+            model = cls(**small_kwargs()).eval()
+            source = model.stem(self.x)
+            # Hold the target fixed to isolate the local evidence -> C -> output path.
+            boundary = torch.randn_like(source, requires_grad=True)
+            states, _, trace = model._refine(source, boundary, reverse_off=False)
+            loss = model._classify(states[-1]).square().sum()
+            for layer in range(model.depth):
+                corrected_c = trace["C_reconciled"][model._reverse_reference_index(layer)]
+                h_proposal = trace["H_proposal"][layer + 1]
+                h_to_c = torch.autograd.grad(
+                    corrected_c.sum(), h_proposal, retain_graph=True
+                )[0]
+                c_to_prediction = torch.autograd.grad(
+                    loss, corrected_c, retain_graph=True
+                )[0]
+                self.assertGreater(h_to_c.abs().sum().item(), 0)
+                self.assertGreater(c_to_prediction.abs().sum().item(), 0)
+
+    def test_removing_only_paired_c_update_changes_prediction_without_diagnostics(self) -> None:
+        model = CountercurrentCNN(**small_kwargs()).eval()
+        expected = model(self.x)
+        exchange = model.exchange[0]
+        original = exchange.paired_update
+
+        def remove_c_correction(h_bar, c_bar):
+            h, _, q = original(h_bar, c_bar)
+            return h, c_bar, q
+
+        with patch.object(exchange, "paired_update", side_effect=remove_c_correction):
+            changed = model(self.x)
+        self.assertGreater((expected - changed).abs().max().item(), 1e-7)
+
+    def test_transport_direction_and_identical_initial_target_content(self) -> None:
+        cc = CountercurrentCNN(**small_kwargs()).eval()
+        co = CocurrentCNN(**small_kwargs()).eval()
+        co.load_state_dict(cc.state_dict())
+        boundaries = []
+        for model, order in ((cc, [2, 1, 0]), (co, [0, 1, 2])):
+            calls = []
+            handles = [block.register_forward_hook(
+                lambda _m, _i, _o, layer=layer: calls.append(layer)
+            ) for layer, block in enumerate(model.G)]
+            try:
+                _, diag = model(self.x, return_diagnostics=True)
+            finally:
+                for handle in handles:
+                    handle.remove()
+            self.assertEqual(calls, order * model.refine_steps)
+            boundaries.append(diag["boundary_history"][0])
+        torch.testing.assert_close(*boundaries)
+
+    def test_labels_cannot_enter_main_forward_and_oracle_is_explicit(self) -> None:
+        model = CountercurrentCNN(**small_kwargs()).eval()
+        labels = torch.tensor([0, 1])
+        with self.assertRaises(TypeError):
+            model(self.x, labels)
+        with self.assertRaises(TypeError):
+            model(self.x, labels=labels)
+        normal = model(self.x)
+        oracle = GTOracleCountercurrent(model)
+        _, diag = oracle(self.x, labels, return_diagnostics=True)
+        boundary = model.target_boundary
+        expected = boundary.projector(boundary.class_prototypes[labels])
+        expected = expected[:, :, None, None].expand(-1, -1, 8, 8)
+        torch.testing.assert_close(diag["boundary_history"][0], expected)
+        self.assertTrue(diag["oracle_analysis_only"].item())
+        torch.testing.assert_close(model(self.x), normal)
+
+    def test_final_ce_reaches_all_parameter_groups_and_earlier_hypothesis(self) -> None:
+        model = CountercurrentCNN(**small_kwargs()).train()
+        captured = []
+        handle = model.head.register_forward_hook(lambda _m, _i, output: captured.append(output))
+        try:
+            logits = model(self.x)
+        finally:
+            handle.remove()
+        captured[0].retain_grad()
+        torch.nn.functional.cross_entropy(logits, torch.tensor([2, 5])).backward()
+        self.assertGreater(captured[0].grad.abs().sum().item(), 0)
+        for name, parameter in model.named_parameters():
+            self.assertIsNotNone(parameter.grad, name)
+            self.assertTrue(torch.isfinite(parameter.grad).all(), name)
+            self.assertGreater(parameter.grad.abs().sum().item(), 0, name)
+
+    def test_diagnostics_do_not_change_inference_or_training_gradients(self) -> None:
+        model = CountercurrentCNN(**small_kwargs())
+        logits = model(self.x)
+        gradients = torch.autograd.grad(logits.square().sum(), tuple(model.parameters()))
+        captured_logits, _ = model(self.x, return_diagnostics=True)
+        captured_gradients = torch.autograd.grad(
+            captured_logits.square().sum(), tuple(model.parameters())
+        )
+        torch.testing.assert_close(logits, captured_logits)
+        for normal, captured in zip(gradients, captured_gradients, strict=True):
+            torch.testing.assert_close(normal, captured)
+
+    def test_reverse_off_disables_both_flux_stages_and_keeps_source(self) -> None:
+        for cls in (CountercurrentCNN, CocurrentCNN):
+            model = cls(**small_kwargs()).eval()
+            _, diag = model(self.x, return_diagnostics=True, reverse_off=True)
+            for key in ("Q", "proposal_Q"):
+                self.assertEqual(torch.count_nonzero(diag[key]).item(), 0)
+            for state in diag["H_history"]:
+                torch.testing.assert_close(state, diag["H_history"][0])
+
+    def test_active_schedule_rejects_legacy_checkpoint_silently_reused_as_new(self) -> None:
+        from countercurrent_nn.legacy.old_wrong_countercurrent.models import CountercurrentCNN as OldCC
+        old = OldCC(**small_kwargs())
+        with self.assertRaisesRegex(RuntimeError, "_inference_version"):
+            CountercurrentCNN(**small_kwargs()).load_state_dict(old.state_dict())
+
+    def test_forward_recurrent_matches_transport_budget(self) -> None:
+        kwargs = small_kwargs()
+        cc = CountercurrentCNN(**kwargs)
+        recurrent = ForwardOnlyRecurrentCNN(**kwargs)
+        sample = self.x[:1]
+        # Conv/Linear scope: only the boundary projector is absent in recurrence.
+        difference = count_macs(cc, sample) - count_macs(recurrent, sample)
+        self.assertEqual(difference, cc.refine_steps * 8 * 8)
+
+    def test_every_active_config_builds_and_predicts(self) -> None:
+        config_root = Path(__file__).parents[1] / "countercurrent_nn" / "configs"
+        for path in config_root.glob("*.yaml"):
+            with self.subTest(config=path.name):
+                config = yaml.safe_load(path.read_text())
+                config["model"].update(channels=8, num_groups=2)
+                model = build_model(config["model"]).eval()
+                with torch.no_grad():
+                    logits = model(self.x)
+                self.assertEqual(logits.shape, (2, 10))
+                self.assertTrue(torch.isfinite(logits).all())
 
 
 if __name__ == "__main__":
