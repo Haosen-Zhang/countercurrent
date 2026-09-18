@@ -75,6 +75,7 @@ class InputConditionalTargetBoundary(nn.Module):
         prototype_dim: int = 64,
         num_groups: int = 8,
         initial_alpha: float = 0.1,
+        target_rms: float | None = None,
     ) -> None:
         super().__init__()
         if num_classes <= 0 or channels <= 0 or prototype_dim <= 0:
@@ -87,16 +88,53 @@ class InputConditionalTargetBoundary(nn.Module):
         )
         self.projector = nn.Linear(prototype_dim, channels)
         self.instance_scale = nn.Parameter(torch.tensor(float(initial_alpha)))
+        # The prototype/projector output is naturally tiny (rms ~0.07), while the
+        # forward terminal state sits around rms 0.6.  A transport block is
+        # x + beta * f(x) with beta = 0.1, so it is close to the identity in
+        # magnitude and cannot make up a 7x gap: without this gain the reverse
+        # field stays an order of magnitude smaller than H and the discrepancy
+        # reduces to a rescaling of the forward activations.
+        self.gain = nn.Parameter(torch.ones(()))
         self.instance_encoder = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, bias=False),
             nn.GroupNorm(num_groups, channels),
             nn.SiLU(),
             nn.Conv2d(channels, channels, kernel_size=1, bias=False),
         )
+        if target_rms is not None:
+            self._calibrate_gain(float(target_rms))
 
     @property
     def alpha(self) -> Tensor:
         return self.instance_scale
+
+    @torch.no_grad()
+    def _calibrate_gain(self, target_rms: float) -> None:
+        """Set the output gain so the boundary starts at ``target_rms``.
+
+        The scale is measured on the module as built, so the calibration holds
+        whatever the prototype or projector initialisation happens to be.  The
+        gain stays a learnable parameter and is free to move during training.
+        """
+        if target_rms <= 0:
+            raise ValueError("target_rms must be positive")
+        logits = torch.zeros(1, self.num_classes)
+        reference = torch.zeros(1, self.channels, 8, 8)
+        raw = self._raw_boundary(logits, reference)
+        current = raw.square().mean().sqrt()
+        if float(current) > 0:
+            self.gain.fill_(target_rms / float(current))
+
+    def _raw_boundary(self, logits: Tensor, reference: Tensor) -> Tensor:
+        """Boundary before the output gain; shared by forward and calibration. """
+        probabilities = logits.softmax(dim=-1)
+        hypothesis = probabilities @ self.class_prototypes
+        channels = self.projector(hypothesis)
+        boundary = channels[:, :, None, None].expand(
+            -1, -1, reference.shape[-2], reference.shape[-1]
+        )
+        instance = self.instance_encoder(reference.detach())
+        return boundary + self.instance_scale * instance
 
     def forward(self, logits: Tensor, reference: Tensor) -> tuple[Tensor, Tensor]:
         if logits.ndim != 2 or logits.shape[1] != self.num_classes:
@@ -107,15 +145,9 @@ class InputConditionalTargetBoundary(nn.Module):
             raise ValueError(
                 f"expected reference [B,{self.channels},H,W], got {tuple(reference.shape)}"
             )
-        probabilities = logits.softmax(dim=-1)
-        hypothesis = probabilities @ self.class_prototypes
-        channels = self.projector(hypothesis)
-        boundary = channels[:, :, None, None].expand(
-            -1, -1, reference.shape[-2], reference.shape[-1]
-        )
-        instance = self.instance_encoder(reference.detach())
-        boundary = boundary + self.instance_scale * instance
-        return boundary, probabilities
+        boundary = self._raw_boundary(logits, reference) * self.gain
+        return boundary, logits.softmax(dim=-1)
+
 
 class NullTargetBoundary(nn.Module):
     """Zero-information target boundary used only as a topology ablation."""
@@ -149,6 +181,7 @@ def build_boundary(
     channels: int,
     prototype_dim: int,
     spatial_size: int,
+    target_rms: float | None = None,
 ) -> nn.Module:
     if kind == "self_generated":
         return SelfGeneratedTargetBoundary(
@@ -161,6 +194,7 @@ def build_boundary(
             num_classes=num_classes,
             channels=channels,
             prototype_dim=prototype_dim,
+            target_rms=target_rms,
         )
     if kind == "null":
         return NullTargetBoundary()

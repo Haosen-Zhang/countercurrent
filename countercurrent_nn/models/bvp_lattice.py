@@ -83,6 +83,7 @@ class BVPCounterflow(nn.Module):
         reverse_beta: float = 0.1,
         reverse_init_from_forward: bool = False,
         inverse_steps: int = 15,
+        boundary_target_rms: float | None = None,
     ) -> None:
         super().__init__()
         if topology not in ("countercurrent", "cocurrent"):
@@ -155,6 +156,7 @@ class BVPCounterflow(nn.Module):
             channels=channels,
             prototype_dim=prototype_dim,
             spatial_size=lattice_size,
+            target_rms=boundary_target_rms,
         )
         if boundary_type == "input_conditional":
             with torch.no_grad():

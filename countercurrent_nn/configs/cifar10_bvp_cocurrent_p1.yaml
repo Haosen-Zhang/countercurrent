@@ -26,6 +26,7 @@ model:
   truncate_steps: 4
   diagnostic_stride: 1
   boundary_initial_alpha: 0.1
+  boundary_target_rms: 0.55
   flow: independent
   reverse_beta: 0.1
   inverse_steps: 15

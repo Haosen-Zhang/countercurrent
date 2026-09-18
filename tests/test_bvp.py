@@ -85,6 +85,29 @@ class BoundaryTests(unittest.TestCase):
         gradient = torch.autograd.grad(out.sum(), reference, allow_unused=True)[0]
         self.assertIsNone(gradient)
 
+    def test_gain_calibration_matches_the_target_magnitude(self):
+        boundary = InputConditionalTargetBoundary(
+            num_classes=10, channels=32, target_rms=2.5
+        )
+        reference = torch.zeros(1, 32, 8, 8)
+        with torch.no_grad():
+            out, _ = boundary(torch.zeros(1, 10), reference)
+        self.assertAlmostEqual(float(out.square().mean().sqrt()), 2.5, places=3)
+
+    def test_gain_stays_learnable(self):
+        boundary = InputConditionalTargetBoundary(
+            num_classes=10, channels=32, target_rms=2.5
+        )
+        logits = torch.zeros(1, 10, requires_grad=True)
+        out, _ = boundary(logits, torch.zeros(1, 32, 8, 8))
+        out.sum().backward()
+        self.assertIsNotNone(boundary.gain.grad)
+        self.assertNotEqual(float(boundary.gain.grad), 0.0)
+
+    def test_uncalibrated_gain_is_the_identity(self):
+        boundary = InputConditionalTargetBoundary(num_classes=10, channels=32)
+        self.assertEqual(float(boundary.gain), 1.0)
+
     def test_hypothesis_changes_the_boundary_shape(self):
         boundary = InputConditionalTargetBoundary(num_classes=10, channels=32)
         reference = torch.zeros(1, 32, 8, 8)

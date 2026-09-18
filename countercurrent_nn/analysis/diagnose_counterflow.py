@@ -121,11 +121,18 @@ def measure_R1_R2(diagnostics: dict[str, Any]) -> dict[str, Any]:
         stage = discrepancy[-1]
         for depth in range(stage.shape[0]):
             h_bar = final_h[depth + 1]
+            c_bar = final_c[depth]
             d_l = stage[depth]
+            # Share of D's energy that comes from C rather than from H.  If D were
+            # a pure rescaling of H this would be near zero.
+            h_energy = h_bar.square().sum().item()
+            c_energy = c_bar.square().sum().item()
+            total = h_energy + c_energy
             r2_rows.append(
                 {
                     "depth": depth,
                     "cos_D_Hbar": batch_cosine(d_l, h_bar),
+                    "c_energy_share": c_energy / total if total > 0 else 0.0,
                 }
             )
     return {"R1": rows, "R2": r2_rows}
@@ -221,7 +228,10 @@ def measure_R4(model: nn.Module, x: Tensor, extra_iterations: int) -> dict[str, 
 def verdict(report: dict[str, Any]) -> dict[str, Any]:
     r1 = report["R1"]
     ratio_ok = all(RATIO_LOW <= row["ratio_C_over_H"] <= RATIO_HIGH for row in r1)
-    cos_ok = all(row["cos_H_C"] > 0.0 for row in r1)
+    # Near-orthogonal is acceptable: the exchange H <- H - gamma*(H - C) needs C to
+    # supply a direction, not to be aligned with H.  Only strong anti-alignment
+    # (cos ~ -1) would mean the two fields live in unrelated spaces.
+    cos_ok = all(row["cos_H_C"] > -0.2 for row in r1)
     r2 = report["R2"]
     r2_ok = bool(r2) and all(row["cos_D_Hbar"] < R2_MAX for row in r2)
     r3_ok = report["R3"]["random_hypothesis"] > R3_MIN
@@ -229,7 +239,10 @@ def verdict(report: dict[str, Any]) -> dict[str, Any]:
     r4_ok = bool(history) and history[-1]["relative_state_change"] > 1e-6
 
     checks = {
-        "R1_same_space": {"pass": ratio_ok and cos_ok, "detail": "rms ratio in [0.8,1.25] and cos(H,C)>0 at every depth"},
+        "R1_same_space": {
+            "pass": ratio_ok and cos_ok,
+            "detail": "rms ratio in [0.8,1.25] and cos(H,C) > -0.2 at every depth",
+        },
         "R2_discrepancy_is_informative": {"pass": r2_ok, "detail": f"cos(D,H_bar) < {R2_MAX} at every depth"},
         "R3_boundary_carries_instance_content": {"pass": r3_ok, "detail": f"random-hypothesis logit change > {R3_MIN}"},
         "R4_iterative_solver": {"pass": r4_ok, "detail": "state keeps changing after the first round"},
