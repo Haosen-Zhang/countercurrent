@@ -8,9 +8,16 @@ from typing import Any
 from torch import nn
 
 from .boundary import (
+    InputConditionalTargetBoundary,
     LearnedTargetBoundary,
     NullTargetBoundary,
     SelfGeneratedTargetBoundary,
+)
+from .bvp_lattice import (
+    BVPCocurrentCNN,
+    BVPCountercurrentCNN,
+    InvertibleBVPCocurrentCNN,
+    InvertibleBVPCountercurrentCNN,
 )
 from .cocurrent import CocurrentCNN
 from .countercurrent import (
@@ -42,6 +49,10 @@ MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "cocurrent": CocurrentCNN,
     "countercurrent": CountercurrentCNN,
     "parallel_two_stream": ParallelTwoStreamCNN,
+    "bvp_countercurrent": BVPCountercurrentCNN,
+    "bvp_cocurrent": BVPCocurrentCNN,
+    "inv_bvp_countercurrent": InvertibleBVPCountercurrentCNN,
+    "inv_bvp_cocurrent": InvertibleBVPCocurrentCNN,
 }
 
 
@@ -66,7 +77,11 @@ def build_model(config: Mapping[str, Any] | str, **overrides: Any) -> nn.Module:
 
 
 __all__ = [
+    "BVPCocurrentCNN",
+    "BVPCountercurrentCNN",
     "ClassicCNN",
+    "InvertibleBVPCocurrentCNN",
+    "InvertibleBVPCountercurrentCNN",
     "ChannelwiseConductance",
     "CocurrentCNN",
     "CountercurrentCNN",
@@ -75,6 +90,7 @@ __all__ = [
     "FeedbackFusionCNN",
     "ForwardOnlyRecurrentCNN",
     "LearnedBoundaryCountercurrentCNN",
+    "InputConditionalTargetBoundary",
     "LearnedTargetBoundary",
     "MODEL_REGISTRY",
     "ParallelTwoStreamCNN",

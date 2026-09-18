@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .firecrawl/
 .venv/
+.pip-cache/
+.DS_Store
 data/
 countercurrent_nn/results/*/
 *.pt

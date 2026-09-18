@@ -7,7 +7,14 @@ from typing import Literal
 import torch
 from torch import Tensor, nn
 
-BoundaryKind = Literal["self_generated", "null", "learned"]
+from .stem import _check_groups
+
+BoundaryKind = Literal[
+    "self_generated",
+    "input_conditional",
+    "null",
+    "learned",
+]
 
 
 class SelfGeneratedTargetBoundary(nn.Module):
@@ -42,6 +49,73 @@ class SelfGeneratedTargetBoundary(nn.Module):
         )
         return boundary, probabilities
 
+
+class InputConditionalTargetBoundary(nn.Module):
+    """Target boundary conditioned on both the hypothesis and the evidence.
+
+    The plain self-generated boundary is a spatial constant built only from the
+    class hypothesis, so it cannot describe *this* input.  Measured on the V4
+    model it moved the logits by 0.19% relative and was indistinguishable from a
+    uniform hypothesis.  This boundary adds an instance-conditioned term read off
+    the forward terminal state:
+
+        C_L = B0(z_hyp) + alpha * Proj(phi(sg[H_L]))
+
+    ``sg`` is a stop-gradient: it keeps the information path hypothesis -> evidence
+    while removing the degenerate solution in which the network collapses H_L onto
+    C_L to silence the exchange flux.  ``alpha`` starts at zero so training begins
+    from the previous behaviour and learns how much instance content to inject.
+    """
+
+    def __init__(
+        self,
+        *,
+        num_classes: int,
+        channels: int = 64,
+        prototype_dim: int = 64,
+        num_groups: int = 8,
+        initial_alpha: float = 0.1,
+    ) -> None:
+        super().__init__()
+        if num_classes <= 0 or channels <= 0 or prototype_dim <= 0:
+            raise ValueError("num_classes, channels, and prototype_dim must be positive")
+        _check_groups(channels, num_groups)
+        self.num_classes = int(num_classes)
+        self.channels = int(channels)
+        self.class_prototypes = nn.Parameter(
+            torch.randn(num_classes, prototype_dim) * 0.02
+        )
+        self.projector = nn.Linear(prototype_dim, channels)
+        self.instance_scale = nn.Parameter(torch.tensor(float(initial_alpha)))
+        self.instance_encoder = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=1, bias=False),
+            nn.GroupNorm(num_groups, channels),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, kernel_size=1, bias=False),
+        )
+
+    @property
+    def alpha(self) -> Tensor:
+        return self.instance_scale
+
+    def forward(self, logits: Tensor, reference: Tensor) -> tuple[Tensor, Tensor]:
+        if logits.ndim != 2 or logits.shape[1] != self.num_classes:
+            raise ValueError(
+                f"expected logits [B,{self.num_classes}], got {tuple(logits.shape)}"
+            )
+        if reference.ndim != 4 or reference.shape[1] != self.channels:
+            raise ValueError(
+                f"expected reference [B,{self.channels},H,W], got {tuple(reference.shape)}"
+            )
+        probabilities = logits.softmax(dim=-1)
+        hypothesis = probabilities @ self.class_prototypes
+        channels = self.projector(hypothesis)
+        boundary = channels[:, :, None, None].expand(
+            -1, -1, reference.shape[-2], reference.shape[-1]
+        )
+        instance = self.instance_encoder(reference.detach())
+        boundary = boundary + self.instance_scale * instance
+        return boundary, probabilities
 
 class NullTargetBoundary(nn.Module):
     """Zero-information target boundary used only as a topology ablation."""
@@ -82,6 +156,12 @@ def build_boundary(
             channels=channels,
             prototype_dim=prototype_dim,
         )
+    if kind == "input_conditional":
+        return InputConditionalTargetBoundary(
+            num_classes=num_classes,
+            channels=channels,
+            prototype_dim=prototype_dim,
+        )
     if kind == "null":
         return NullTargetBoundary()
     if kind == "learned":
@@ -91,6 +171,7 @@ def build_boundary(
 
 __all__ = [
     "BoundaryKind",
+    "InputConditionalTargetBoundary",
     "LearnedTargetBoundary",
     "NullTargetBoundary",
     "SelfGeneratedTargetBoundary",
