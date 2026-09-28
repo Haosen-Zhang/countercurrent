@@ -380,7 +380,19 @@ class BVPCounterflow(nn.Module):
         return logits, iteration_logits, diagnostics
 
     def predict_iterations(self, x: Tensor, *, reverse_off: bool = False) -> Tensor:
+        """Return a fixed-length trajectory for dataset-level aggregation.
+
+        The solver stops early when the current batch reaches ``tol``, so two
+        batches can naturally produce trajectories of different lengths.  Once
+        a batch has converged its prediction is unchanged by further solver
+        steps.  Repeat that final prediction through the configured step budget
+        so evaluation can aggregate every iteration over the same examples.
+        ``solve()`` and its diagnostics still report the actual stopping step.
+        """
         _, logits, _ = self._run(x, capture_diagnostics=False, reverse_off=reverse_off)
+        expected_steps = self.solve_steps + 1  # includes the pure-forward t=0
+        if len(logits) < expected_steps:
+            logits.extend([logits[-1]] * (expected_steps - len(logits)))
         return torch.stack(logits)
 
     def forward(

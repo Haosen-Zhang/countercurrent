@@ -193,6 +193,19 @@ class SolverTests(unittest.TestCase):
                 torch.allclose(diagnostics["H_history"][step, 0], source, atol=1e-6)
             )
 
+    def test_prediction_trajectory_is_padded_after_early_stopping(self):
+        model = tiny_model(
+            "bvp_countercurrent", solve_steps=8, tol=1e9
+        )
+        x = torch.randn(2, 3, 32, 32)
+        with torch.no_grad():
+            _, history = model.run_solver(x)
+            predictions = model.predict_iterations(x)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(predictions.shape, (model.solve_steps + 1, 2, 10))
+        for step in range(2, model.solve_steps + 1):
+            torch.testing.assert_close(predictions[step], predictions[1])
+
 
 class ContractTests(unittest.TestCase):
     def test_main_model_never_accepts_labels(self):
