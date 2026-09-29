@@ -322,7 +322,19 @@ def summarize_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
         "proposal_discrepancy",
         "proposal_exchange_energy",
         "residual",
+        "equation_residual",
+        "step_residual",
+        "solve_steps_per_sample",
+        "converged",
         "gamma",
+        "u_h_norm",
+        "u_c_norm",
+        "cos_u_h_u_c",
+        "cos_d_u_h",
+        "cos_q_u_h",
+        "boundary_component_norm",
+        "boundary_component_ratio",
+        "boundary_global_gain",
     ):
         value = diagnostics.get(key)
         if isinstance(value, Tensor):

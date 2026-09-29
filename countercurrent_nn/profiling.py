@@ -41,11 +41,19 @@ def count_macs(model: nn.Module, sample: Tensor) -> int:
             handles.append(module.register_forward_hook(add_hook(_linear_macs)))
 
     was_training = model.training
+    # Adaptive solvers execute data-dependent work.  Count their architectural
+    # maximum so topology controls are compared under one fixed compute budget;
+    # latency and reported solve-step distributions retain the adaptive cost.
+    original_tolerance = getattr(model, "tolerance", None)
+    if hasattr(model, "eval_max_steps") and original_tolerance is not None:
+        model.tolerance = 0.0
     model.eval()
     try:
         with torch.inference_mode():
             model(sample)
     finally:
+        if original_tolerance is not None:
+            model.tolerance = original_tolerance
         for handle in handles:
             handle.remove()
         model.train(was_training)

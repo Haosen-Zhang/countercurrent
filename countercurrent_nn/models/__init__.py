@@ -29,6 +29,11 @@ from .countercurrent import (
 from .exchange import ChannelwiseConductance, ExchangeBlock
 from .feedback_fusion import FeedbackFusionCNN
 from .parallel_two_stream import ParallelTwoStreamCNN
+from .persistent_bvp import (
+    PersistentCanonicalCocurrent,
+    PersistentCanonicalCountercurrent,
+    PersistentCanonicalCounterflow,
+)
 from .recurrent_forward import ForwardOnlyRecurrentCNN, SingleStreamRecurrentCNN
 from .single_stream import (
     ClassicCNN,
@@ -53,6 +58,8 @@ MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "bvp_cocurrent": BVPCocurrentCNN,
     "inv_bvp_countercurrent": InvertibleBVPCountercurrentCNN,
     "inv_bvp_cocurrent": InvertibleBVPCocurrentCNN,
+    "persistent_canonical_countercurrent": PersistentCanonicalCountercurrent,
+    "persistent_canonical_cocurrent": PersistentCanonicalCocurrent,
 }
 
 
@@ -94,6 +101,9 @@ __all__ = [
     "LearnedTargetBoundary",
     "MODEL_REGISTRY",
     "ParallelTwoStreamCNN",
+    "PersistentCanonicalCocurrent",
+    "PersistentCanonicalCountercurrent",
+    "PersistentCanonicalCounterflow",
     "NullBoundaryCountercurrentCNN",
     "NullTargetBoundary",
     "SingleStreamFeedForwardCNN",

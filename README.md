@@ -6,7 +6,9 @@ target hypothesis 作为两端 boundary，在推理阶段进行 counterflow pair
 - [核心思想](COUNTERCURRENT_CORE_IDEA.md)
 - [实验规范](COUNTERCURRENT_CNN_POC_EXPERIMENT.md)
 - [重实现要求](COUNTERCURRENT_REIMPLEMENT_PROMPT.md)
+- [V5-C 详细规范](COUNTERCURRENT_V5C_DETAILED_PLAN.md)
 - [本次审计、architecture diff 与验证报告](reports/COUNTERCURRENT_REIMPLEMENTATION_REPORT.md)
+- [V5-C architecture diff 与单批次验证](reports/20260929_V5C_REIMPLEMENTATION_REPORT.md)
 
 2026-09-14：主模型已替换为 proposal → paired reconciliation → corrected forward resweep。
 旧代码中的 `C + Q` 只写入 diagnostics；新版把该 corrected C 作为 resweep 的实际输入。
@@ -59,6 +61,33 @@ C_new = c_ref + Q
 - `countercurrent_nn/models/countercurrent.py`、`cocurrent.py`：主模型和同向对照；
 - `countercurrent_nn/models/recurrent_forward.py`：equal-compute forward recurrent 对照；
 - `countercurrent_nn/models/feedback_fusion.py`：普通 feedback fusion 对照。
+
+## V5-C persistent canonical counterflow（2026-09-29）
+
+V5-C 将 H/C 实现为固定双边界驱动的 persistent fields：outer step 只更新一次 target
+boundary，inner solver 使用同步 Jacobi 持续传播 H/C。Exchange 在各自正交通道变换后的
+canonical space 中使用同一个 `-Q/+Q`，训练固定展开 8 步，评估按样本最多求解 24 步。
+旧 `bvp_lattice.py` 保留用于复现实验。
+
+新增主配置：
+
+- `cifar10_v5a_countercurrent_raw.yaml`：persistent solver + raw exchange；
+- `cifar10_v5c_countercurrent.yaml`：canonical Countercurrent；
+- `cifar10_v5c_cocurrent.yaml`：相同参数和最大计算预算的 Co-current control。
+
+正式训练前的检查命令：
+
+```bash
+conda run -n 4dflow python -m unittest tests.test_v5c tests.test_v5c_toy -v
+CUDA_VISIBLE_DEVICES=2 conda run -n 4dflow python -m countercurrent_nn.v5c_sanity_check \
+  --config countercurrent_nn/configs/cifar10_v5c_countercurrent.yaml \
+  --data-root ./dataset --batch-size 4 --device cuda:0 \
+  --output reports/v5c_one_batch_sanity.json
+```
+
+当前仅完成单元测试、toy BVP 和真实 CIFAR-10 单批次检查，尚未启动完整训练。详细差异、
+数值和下一阶段 gate 见
+[V5-C 重实现报告](reports/20260929_V5C_REIMPLEMENTATION_REPORT.md)。
 
 ## 实验组
 
