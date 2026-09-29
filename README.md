@@ -89,6 +89,26 @@ CUDA_VISIBLE_DEVICES=2 conda run -n 4dflow python -m countercurrent_nn.v5c_sanit
 数值和下一阶段 gate 见
 [V5-C 重实现报告](reports/20260929_V5C_REIMPLEMENTATION_REPORT.md)。
 
+长训练前 patch 已将 boundary mechanism scalars 和 conductance 设置为 weight decay 0，
+并用正交 identity round-trip 将 V5-A Raw control 严格匹配到 Canonical 模型的参数与最大
+MAC。三份 V5 配置会逐 epoch 将 `req`、`Rclass`、`cosD` 写入 `metrics.jsonl` 并打印到终端，
+用于先做 10–20 epoch diagnostic pilot。
+
+GPU 2、3 上先跑 20 epoch pilot：
+
+```bash
+CUDA_VISIBLE_DEVICES=2,3 torchrun --nnodes=1 --nproc-per-node=2 \
+  --master-addr=127.0.0.1 --master-port=29525 \
+  -m countercurrent_nn.train \
+  --config countercurrent_nn/configs/cifar10_v5c_countercurrent.yaml \
+  --data-root ./dataset --no-download --device cuda \
+  --batch-size 128 --epochs 20 --seed 0 \
+  --output-dir countercurrent_nn/results/cifar10_v5c_countercurrent_pilot20_seed0
+```
+
+Pilot 与正式 200 epochs 使用不同的 cosine schedule。正式实验应新建输出目录并从头训练，
+不要从 pilot checkpoint resume。
+
 ## 实验组
 
 | 配置 | 目的 |

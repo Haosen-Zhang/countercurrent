@@ -95,7 +95,7 @@ fixed point；adaptive early-stop 与固定长迭代一致。
 |---|---:|---:|
 | V5-C Countercurrent | 812,270 | 1,010,318,976 |
 | V5-C Co-current | 812,270 | 1,010,318,976 |
-| V5-A raw Countercurrent | 779,502 | 959,987,328 |
+| V5-A raw Countercurrent（最初未匹配版本） | 779,502 | 959,987,328 |
 
 Co/Counter 的参数和最大计算预算完全一致。实际 eval latency仍受逐样本提前停止步数影响，
 应在正式实验中单独报告 solve-step distribution 和 latency。
@@ -109,3 +109,19 @@ Countercurrent 的分类优势，因为尚未训练模型，也尚未做真实/�
 Co-current。seed 0 先检查：测试集 24 步内收敛率、class boundary 干预、
 `cos(D,u_H)` 是否退化为 scaling，以及 CC/Co 的方向差异。通过这些 gate 后再补 3 个 seeds；
 在 CC 稳定优于 Co 且 target hypothesis 有明确贡献之前，不进入 CIFAR-100。
+
+## 长训练前 small patch
+
+2026-09-29 的后续 patch 将 `base_scale`、`class_scale`、`instance_scale` 和
+`log_global_gain` 与 conductance 一起放入 weight decay 0 参数组。Raw control 使用两条
+严格正交的 encode/decode round-trip；round-trip 数学上为 identity，所以仍严格计算
+`D=H-C`，同时补齐 Canonical 模型的参数和 Linear MAC。修改后 V5-A Raw、V5-C
+Countercurrent 和 V5-C Co-current 均为 812,270 参数、1,010,318,976 MAC。
+
+V5 三份配置还会在每个 epoch 的 `metrics.jsonl` 中记录紧凑机制指标：最终 equation
+residual、收敛率、`R_class` 与最终 `|cos(D,u_H)|`。终端也会打印 `req`、`Rclass` 和
+`cosD`，用于 10–20 epoch diagnostic pilot 的 go/no-go 判断。
+
+Patch 后全仓库 92 项测试通过。额外的 1 epoch / 1 batch synthetic smoke 成功写出机制日志：
+`req=8.045e-4`、`Rclass=0.1372`、`cosD=0.7776`。这些 synthetic 数值只验证日志链路，
+不作为机制或精度结论。

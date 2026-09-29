@@ -21,6 +21,7 @@ from countercurrent_nn.engine import (
     evaluate,
     evaluate_refinement,
     summarize_diagnostics,
+    summarize_v5_mechanisms,
     train_one_epoch,
 )
 from countercurrent_nn.models import build_model
@@ -167,7 +168,11 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
                 "start a fresh experiment"
             )
         previous = checkpoint["config"]["training"]
-        for key, default in (("initial_loss_weight", 0.0), ("conductance_weight_decay", None)):
+        for key, default in (
+            ("initial_loss_weight", 0.0),
+            ("conductance_weight_decay", None),
+            ("boundary_scalar_weight_decay", None),
+        ):
             old_value = previous.get(key, previous.get("weight_decay", 5e-4) if default is None else default)
             new_value = training.get(key, training.get("weight_decay", 5e-4) if default is None else default)
             if float(old_value) != float(new_value):
@@ -237,11 +242,30 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
             "train": train_metrics,
             "validation" if data.validation is not None else "test": validation_metrics,
         }
+        diagnostic_config = config.get("diagnostics", {})
+        if bool(diagnostic_config.get("each_epoch", False)):
+            epoch_diagnostics = collect_diagnostics(
+                model,
+                selection_loader,
+                device,
+                max_samples=int(diagnostic_config.get("max_samples", 16)),
+            )
+            mechanisms = summarize_v5_mechanisms(epoch_diagnostics)
+            if mechanisms:
+                row["mechanisms"] = mechanisms
         append_jsonl(row, metrics_path)
+        mechanism_text = ""
+        if "mechanisms" in row:
+            mechanism = row["mechanisms"]
+            mechanism_text = (
+                f" req={mechanism['equation_residual_final_mean']:.4g}"
+                f" Rclass={mechanism['class_boundary_ratio']:.4g}"
+                f" cosD={mechanism['cos_d_u_h_abs_final_mean']:.4f}"
+            )
         print(
             f"epoch={epoch + 1}/{epochs} train_loss={train_metrics['loss']:.4f} "
             f"train_acc={train_metrics['accuracy']:.4f} "
-            f"eval_acc={validation_metrics['accuracy']:.4f}"
+            f"eval_acc={validation_metrics['accuracy']:.4f}{mechanism_text}"
         )
 
         checkpoint_payload = {

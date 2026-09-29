@@ -75,6 +75,7 @@ def main() -> None:
             "lr": 3e-4,
             "weight_decay": 1e-4,
             "conductance_weight_decay": 0.0,
+            "boundary_scalar_weight_decay": 0.0,
         },
     )
 

@@ -14,6 +14,7 @@ from torch import distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
 from .utils import top1_correct
+from .models.decomposed_boundary import DecomposedTargetBoundary
 from .models.exchange import ChannelwiseConductance
 
 
@@ -21,7 +22,9 @@ def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.Opt
     name = str(config.get("optimizer", "sgd")).lower()
     lr = float(config.get("lr", 0.1))
     weight_decay = float(config.get("weight_decay", 5e-4))
-    parameters = list(model.parameters())
+    all_parameters = list(model.parameters())
+    special_groups: list[dict[str, Any]] = []
+    special_ids: set[int] = set()
     if "conductance_weight_decay" in config:
         conductance_decay = float(config["conductance_weight_decay"])
         if not math.isfinite(conductance_decay) or conductance_decay < 0:
@@ -30,12 +33,48 @@ def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.Opt
                        if isinstance(module, ChannelwiseConductance)]
         if not conductance:
             raise ValueError("conductance_weight_decay requires conductance parameters")
-        conductance_ids = {id(parameter) for parameter in conductance}
-        parameters = [
-            {"params": [p for p in parameters if id(p) not in conductance_ids],
-             "weight_decay": weight_decay},
-            {"params": conductance, "weight_decay": conductance_decay},
+        special_ids.update(id(parameter) for parameter in conductance)
+        special_groups.append(
+            {"params": conductance, "weight_decay": conductance_decay}
+        )
+    if "boundary_scalar_weight_decay" in config:
+        boundary_decay = float(config["boundary_scalar_weight_decay"])
+        if not math.isfinite(boundary_decay) or boundary_decay < 0:
+            raise ValueError(
+                "boundary_scalar_weight_decay must be finite and nonnegative"
+            )
+        boundary_scalars = [
+            parameter
+            for module in model.modules()
+            if isinstance(module, DecomposedTargetBoundary)
+            for parameter in (
+                module.base_scale,
+                module.class_scale,
+                module.instance_scale,
+                module.log_global_gain,
+            )
         ]
+        if not boundary_scalars:
+            raise ValueError(
+                "boundary_scalar_weight_decay requires decomposed boundary scalars"
+            )
+        boundary_ids = {id(parameter) for parameter in boundary_scalars}
+        if special_ids.intersection(boundary_ids):
+            raise RuntimeError("optimizer special parameter groups overlap")
+        special_ids.update(boundary_ids)
+        special_groups.append(
+            {"params": boundary_scalars, "weight_decay": boundary_decay}
+        )
+    if special_groups:
+        regular = [
+            parameter for parameter in all_parameters if id(parameter) not in special_ids
+        ]
+        parameters: Any = [
+            {"params": regular, "weight_decay": weight_decay},
+            *special_groups,
+        ]
+    else:
+        parameters = all_parameters
     if name == "sgd":
         return torch.optim.SGD(
             parameters,
@@ -372,3 +411,40 @@ def summarize_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
             float(amplified.sum().item()) / wrong_count if wrong_count else 0.0
         )
     return summary
+
+
+def summarize_v5_mechanisms(diagnostics: dict[str, Any]) -> dict[str, float]:
+    """Return compact V5 pilot gates suitable for one JSONL row per epoch."""
+    required = (
+        "equation_residual",
+        "converged",
+        "boundary_component_ratio",
+        "cos_d_u_h",
+    )
+    if any(not isinstance(diagnostics.get(key), Tensor) for key in required):
+        return {}
+    equation = diagnostics["equation_residual"].float()
+    converged = diagnostics["converged"].float()
+    ratios = diagnostics["boundary_component_ratio"].float()
+    cosine = diagnostics["cos_d_u_h"].float()
+    if equation.ndim != 2 or equation.shape[0] == 0:
+        return {}
+    if ratios.ndim != 2 or ratios.shape[1] < 2:
+        return {}
+    if cosine.ndim != 2 or cosine.shape[0] == 0:
+        return {}
+    initial_equation = equation[0]
+    final_equation = equation[-1]
+    final_abs_cosine = cosine[-1].abs()
+    return {
+        "equation_residual_initial_mean": float(initial_equation.mean()),
+        "equation_residual_final_mean": float(final_equation.mean()),
+        "equation_residual_final_max": float(final_equation.max()),
+        "equation_residual_decreased_fraction": float(
+            final_equation.lt(initial_equation).float().mean()
+        ),
+        "convergence_rate": float(converged.mean()),
+        "class_boundary_ratio": float(ratios[:, 1].mean()),
+        "cos_d_u_h_abs_final_mean": float(final_abs_cosine.mean()),
+        "cos_d_u_h_abs_final_max": float(final_abs_cosine.max()),
+    }

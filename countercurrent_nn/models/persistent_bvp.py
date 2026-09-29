@@ -50,6 +50,7 @@ class PersistentCanonicalCounterflow(nn.Module):
         boundary_instance_scale: float = 0.1,
         boundary_target_rms: float | None = 0.55,
         use_canonical_exchange: bool = True,
+        match_canonical_compute: bool = False,
     ) -> None:
         super().__init__()
         if topology not in ("countercurrent", "cocurrent"):
@@ -90,6 +91,7 @@ class PersistentCanonicalCounterflow(nn.Module):
                 conductance_max=conductance_max,
                 conductance_init_logit=conductance_init_logit,
                 use_canonical=use_canonical_exchange,
+                match_canonical_compute=match_canonical_compute,
             )
             for _ in range(depth)
         )

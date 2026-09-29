@@ -58,11 +58,17 @@ class CanonicalExchange(nn.Module):
         conductance_max: float = 0.49,
         conductance_init_logit: float = -2.2,
         use_canonical: bool = True,
+        match_canonical_compute: bool = False,
     ) -> None:
         super().__init__()
         self.channels = int(channels)
         self.use_canonical = bool(use_canonical)
-        if self.use_canonical:
+        self.match_canonical_compute = bool(match_canonical_compute)
+        if self.use_canonical and self.match_canonical_compute:
+            raise ValueError(
+                "match_canonical_compute is only valid for raw exchange"
+            )
+        if self.use_canonical or self.match_canonical_compute:
             self.encode_h = OrthogonalChannelTransform(channels)
             self.encode_c = OrthogonalChannelTransform(channels)
         else:
@@ -79,14 +85,21 @@ class CanonicalExchange(nn.Module):
         return self.conductance.gamma
 
     def _decode_h(self, state: Tensor) -> Tensor:
-        if isinstance(self.encode_h, OrthogonalChannelTransform):
+        if self.use_canonical:
             return self.encode_h.decode(state)
         return state
 
     def _decode_c(self, state: Tensor) -> Tensor:
-        if isinstance(self.encode_c, OrthogonalChannelTransform):
+        if self.use_canonical:
             return self.encode_c.decode(state)
         return state
+
+    @staticmethod
+    def _orthogonal_round_trip(
+        transform: OrthogonalChannelTransform, state: Tensor
+    ) -> Tensor:
+        """Spend the canonical transform budget while preserving the raw basis."""
+        return transform.decode(transform.encode(state))
 
     def forward(
         self,
@@ -97,8 +110,16 @@ class CanonicalExchange(nn.Module):
     ) -> tuple[Tensor, Tensor, dict[str, Tensor]]:
         if h_bar.shape != c_bar.shape:
             raise ValueError("canonical exchange inputs must have identical shape")
-        u_h = self.encode_h(h_bar)
-        u_c = self.encode_c(c_bar)
+        if self.match_canonical_compute:
+            if not isinstance(self.encode_h, OrthogonalChannelTransform):
+                raise RuntimeError("matched raw exchange is missing H transform")
+            if not isinstance(self.encode_c, OrthogonalChannelTransform):
+                raise RuntimeError("matched raw exchange is missing C transform")
+            u_h = self._orthogonal_round_trip(self.encode_h, h_bar)
+            u_c = self._orthogonal_round_trip(self.encode_c, c_bar)
+        else:
+            u_h = self.encode_h(h_bar)
+            u_c = self.encode_c(c_bar)
         discrepancy = u_h - u_c
         flux = (
             torch.zeros_like(discrepancy)

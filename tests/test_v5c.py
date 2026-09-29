@@ -10,6 +10,8 @@ from unittest.mock import patch
 import torch
 import yaml
 
+from countercurrent_nn.config import load_config
+from countercurrent_nn.engine import build_optimizer
 from countercurrent_nn.models import build_model
 from countercurrent_nn.models.canonical_exchange import (
     CanonicalExchange,
@@ -73,6 +75,19 @@ class CanonicalExchangeTests(unittest.TestCase):
         h_to_c = torch.autograd.grad(c_new.square().sum(), h_bar)[0]
         self.assertGreater(float(c_to_h.abs().sum()), 0.0)
         self.assertGreater(float(h_to_c.abs().sum()), 0.0)
+
+    def test_compute_matched_raw_exchange_remains_raw(self):
+        module = CanonicalExchange(
+            8, use_canonical=False, match_canonical_compute=True
+        )
+        h_bar = torch.randn(2, 8, 4, 4)
+        c_bar = torch.randn_like(h_bar)
+        h_new, c_new, diagnostics = module(h_bar, c_bar)
+        discrepancy = h_bar - c_bar
+        flux = module.conductance(discrepancy)
+        torch.testing.assert_close(diagnostics["D"], discrepancy, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(h_new, h_bar - flux, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(c_new, c_bar + flux, atol=1e-5, rtol=1e-5)
 
 
 class DecomposedBoundaryTests(unittest.TestCase):
@@ -263,6 +278,48 @@ class V5CFairnessTests(unittest.TestCase):
         )
         sample = torch.zeros(1, 3, 32, 32)
         self.assertEqual(count_macs(counter, sample), count_macs(co, sample))
+
+    def test_compute_matched_raw_control_matches_canonical_budget(self):
+        root = Path(__file__).parents[1] / "countercurrent_nn" / "configs"
+        canonical_config = load_config(root / "cifar10_v5c_countercurrent.yaml")
+        raw_config = load_config(root / "cifar10_v5a_countercurrent_raw.yaml")
+        canonical = build_model(canonical_config["model"]).eval()
+        raw = build_model(raw_config["model"]).eval()
+        self.assertEqual(parameter_counts(canonical), parameter_counts(raw))
+        self.assertEqual(
+            {key: value.shape for key, value in canonical.state_dict().items()},
+            {key: value.shape for key, value in raw.state_dict().items()},
+        )
+        sample = torch.zeros(1, 3, 32, 32)
+        self.assertEqual(count_macs(canonical, sample), count_macs(raw, sample))
+
+    def test_boundary_mechanism_scalars_have_zero_weight_decay(self):
+        model = tiny()
+        optimizer = build_optimizer(
+            model,
+            {
+                "optimizer": "sgd",
+                "lr": 0.1,
+                "weight_decay": 5e-4,
+                "conductance_weight_decay": 0.0,
+                "boundary_scalar_weight_decay": 0.0,
+            },
+        )
+        decay_by_id = {
+            id(parameter): float(group["weight_decay"])
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        }
+        boundary = model.target_boundary
+        for parameter in (
+            boundary.base_scale,
+            boundary.class_scale,
+            boundary.instance_scale,
+            boundary.log_global_gain,
+        ):
+            self.assertEqual(decay_by_id[id(parameter)], 0.0)
+        self.assertEqual(decay_by_id[id(model.exchange[0].conductance.logit_gamma)], 0.0)
+        self.assertEqual(decay_by_id[id(model.head.weight)], 5e-4)
 
     def test_primary_configs_differ_only_in_identity(self):
         root = Path(__file__).parents[1] / "countercurrent_nn" / "configs"

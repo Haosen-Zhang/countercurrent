@@ -30,6 +30,7 @@ model:
   boundary_instance_scale: 0.1
   boundary_target_rms: 0.55
   use_canonical_exchange: false
+  match_canonical_compute: true
 training:
   optimizer: sgd
   lr: 0.1
@@ -41,6 +42,7 @@ training:
   amp: false
   initial_loss_weight: 0.0
   conductance_weight_decay: 0.0
+  boundary_scalar_weight_decay: 0.0
 runtime:
   seed: 0
   device: auto
@@ -48,3 +50,4 @@ runtime:
   output_dir: countercurrent_nn/results/cifar10_v5a_countercurrent_raw_seed0
 diagnostics:
   max_samples: 16
+  each_epoch: true
