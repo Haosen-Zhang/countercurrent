@@ -35,6 +35,13 @@ def pick(summary: dict[str, Any], *names: str) -> Any:
     return None
 
 
+def nested(summary: dict[str, Any], section: str, name: str) -> Any:
+    block = summary.get(section)
+    if isinstance(block, dict):
+        return block.get(name)
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("countercurrent_nn/results"))
@@ -50,9 +57,10 @@ def main() -> None:
             {
                 "arm": arm,
                 "model": model,
-                "val": pick(summary, "best_val_accuracy", "best_validation_accuracy"),
-                "test": pick(summary, "test_accuracy", "final_test_accuracy"),
-                "ce": pick(summary, "test_ce", "test_loss"),
+                "val": pick(summary, "best_selection_accuracy", "best_val_accuracy"),
+                "test": nested(summary, "test", "accuracy")
+                or pick(summary, "test_accuracy"),
+                "ce": nested(summary, "test", "loss") or pick(summary, "test_ce"),
                 "macs": pick(summary, "macs", "conv_linear_macs"),
                 "params": pick(summary, "params", "trainable_params"),
             }
