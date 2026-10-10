@@ -468,8 +468,17 @@ class ReciprocalInferenceRegressionTests(unittest.TestCase):
         for path in config_root.glob("*.yaml"):
             with self.subTest(config=path.name):
                 config = yaml.safe_load(path.read_text())
-                config["model"].update(channels=8, num_groups=2)
-                model = build_model(config["model"]).eval()
+                model_config = dict(config["model"])
+                try:
+                    # Shrink every config that exposes a width knob, so the sweep
+                    # stays fast.
+                    model = build_model(
+                        {**model_config, "channels": 8, "num_groups": 2}
+                    ).eval()
+                except TypeError:
+                    # Families with a fixed width (ResNet-50) take no such knob;
+                    # build them exactly as configured.
+                    model = build_model(model_config).eval()
                 with torch.no_grad():
                     logits = model(self.x)
                 self.assertEqual(logits.shape, (2, 10))

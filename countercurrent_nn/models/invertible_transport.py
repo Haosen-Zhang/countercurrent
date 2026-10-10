@@ -55,8 +55,12 @@ class SpectralNormConv2d(nn.Module):
         )
         self.target = float(target)
         self.power_iterations = int(power_iterations)
-        self.register_buffer("_u", torch.randn(1, out_channels, 1, 1))
-        self.register_buffer("_v", torch.randn(1, in_channels, 1, 1))
+        # The power iteration applies the weight as conv2d(u) -> v and its
+        # transpose back, so u lives in the input space and v in the output
+        # space.  The shapes only matter when in_channels != out_channels; the
+        # square case used elsewhere is unaffected.
+        self.register_buffer("_u", torch.randn(1, in_channels, 1, 1))
+        self.register_buffer("_v", torch.randn(1, out_channels, 1, 1))
 
     @torch.no_grad()
     def _update_estimates(self) -> None:

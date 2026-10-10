@@ -1,0 +1,32 @@
+experiment: resnet50_plain
+dataset:
+  name: cifar10
+  root: dataset
+  download: false
+  val_size: 5000
+  split_seed: 0
+  num_workers: 2
+  pin_memory: false
+model:
+  name: resnet50_plain
+  num_classes: 10
+training:
+  optimizer: sgd
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+  batch_size: 128
+  epochs: 200
+  warmup_epochs: 5
+  amp: false
+  initial_loss_weight: 0.0
+  conductance_weight_decay: 0.0
+  boundary_scalar_weight_decay: 0.0
+runtime:
+  seed: 0
+  device: auto
+  deterministic: false
+  output_dir: countercurrent_nn/results/resnet50_plain_seed0
+diagnostics:
+  max_samples: 16
+  each_epoch: false

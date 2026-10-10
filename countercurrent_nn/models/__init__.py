@@ -35,6 +35,12 @@ from .persistent_bvp import (
     PersistentCanonicalCounterflow,
 )
 from .recurrent_forward import ForwardOnlyRecurrentCNN, SingleStreamRecurrentCNN
+from .resnet_counterflow import (
+    ResNet50Cocurrent,
+    ResNet50Countercurrent,
+    ResNet50LatticeControl,
+    ResNet50Plain,
+)
 from .single_stream import (
     ClassicCNN,
     SingleStreamFeedForwardCNN,
@@ -60,6 +66,10 @@ MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "inv_bvp_cocurrent": InvertibleBVPCocurrentCNN,
     "persistent_canonical_countercurrent": PersistentCanonicalCountercurrent,
     "persistent_canonical_cocurrent": PersistentCanonicalCocurrent,
+    "resnet50_plain": ResNet50Plain,
+    "resnet50_countercurrent": ResNet50Countercurrent,
+    "resnet50_cocurrent": ResNet50Cocurrent,
+    "resnet50_lattice_control": ResNet50LatticeControl,
 }
 
 
@@ -104,6 +114,10 @@ __all__ = [
     "PersistentCanonicalCocurrent",
     "PersistentCanonicalCountercurrent",
     "PersistentCanonicalCounterflow",
+    "ResNet50Cocurrent",
+    "ResNet50Countercurrent",
+    "ResNet50LatticeControl",
+    "ResNet50Plain",
     "NullBoundaryCountercurrentCNN",
     "NullTargetBoundary",
     "SingleStreamFeedForwardCNN",
