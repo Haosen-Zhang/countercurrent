@@ -1,0 +1,25 @@
+=== pilot start Sat Oct 10 18:37:30 +08 2026 ===
+
+######## resnet50_plain ########
+model=resnet50_plain device=mps params=23,520,842 MACs=1,297,829,888 world_size=1 global_batch=128 per_rank_batch=128
+epoch=1/3 train_loss=1.9629 train_acc=0.2968 eval_acc=0.3152
+epoch=2/3 train_loss=1.3706 train_acc=0.5031 eval_acc=0.5286
+epoch=3/3 train_loss=1.0681 train_acc=0.6193 eval_acc=0.5708
+test_acc=0.5862 output=countercurrent_nn/results/pilot_resnet50_plain
+exit=0 for resnet50_plain after 791s
+
+######## resnet50_lattice_control ########
+model=resnet50_lattice_control device=mps params=23,897,624 MACs=1,297,829,888 world_size=1 global_batch=128 per_rank_batch=128
+epoch=1/3 train_loss=1.8923 train_acc=0.3308 eval_acc=0.4006
+epoch=2/3 train_loss=1.3131 train_acc=0.5350 eval_acc=0.4612
+epoch=3/3 train_loss=1.0469 train_acc=0.6304 eval_acc=0.6410
+test_acc=0.6308 output=countercurrent_nn/results/pilot_resnet50_lattice_control
+exit=0 for resnet50_lattice_control after 820s
+
+######## resnet50_countercurrent ########
+model=resnet50_countercurrent device=mps params=23,897,624 MACs=51,865,556,992 world_size=1 global_batch=128 per_rank_batch=128
+exit=143 for resnet50_countercurrent after 10893s
+
+######## resnet50_cocurrent ########
+/Users/haosen/miniconda3/lib/python3.11/multiprocessing/resource_tracker.py:224: UserWarning: resource_tracker: There appear to be 28 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

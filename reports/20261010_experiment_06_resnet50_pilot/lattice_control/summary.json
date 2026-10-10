@@ -1,0 +1,61 @@
+{
+  "model": "resnet50_lattice_control",
+  "inference_version": 0,
+  "seed": 0,
+  "world_size": 1,
+  "global_batch_size": 128,
+  "per_rank_batch_size": 128,
+  "params": 23897624,
+  "trainable_params": 23897624,
+  "macs": 1297829888,
+  "flops_approx": 2595659776,
+  "best_selection_accuracy": 0.641,
+  "test": {
+    "loss": 1.0325777099609375,
+    "accuracy": 0.6308,
+    "examples": 10000.0,
+    "seconds": 19.793759041999692,
+    "examples_per_second": 505.20974711177126
+  },
+  "refinement": {
+    "iteration_accuracy": [
+      0.6308000087738037
+    ],
+    "iteration_confidence": [
+      0.686896800994873
+    ],
+    "iteration_entropy": [
+      0.8629618287086487
+    ],
+    "initial_wrong_examples": 3692,
+    "error_correction_rate": 0.0,
+    "error_amplification_rate": 0.0,
+    "error_amplification_delta": 0.1
+  },
+  "reverse_off_test": {
+    "loss": 1.0325777099609375,
+    "accuracy": 0.6308,
+    "examples": 10000.0,
+    "seconds": 15.190380708999783,
+    "examples_per_second": 658.3113479226588
+  },
+  "reverse_off_refinement": {
+    "iteration_accuracy": [
+      0.6308000087738037
+    ],
+    "iteration_confidence": [
+      0.686896800994873
+    ],
+    "iteration_entropy": [
+      0.8629618287086487
+    ],
+    "initial_wrong_examples": 3692,
+    "error_correction_rate": 0.0,
+    "error_amplification_rate": 0.0,
+    "error_amplification_delta": 0.1
+  },
+  "reverse_accuracy_drop": 0.0,
+  "wall_time_seconds": 783.1649256660003,
+  "peak_memory_bytes": 0,
+  "synthetic_data": false
+}

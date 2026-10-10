@@ -1,0 +1,1 @@
+{"epoch": 0, "train": {"loss": 1.9242713585323759, "final_loss": 1.9242713585323759, "accuracy": 0.322, "examples": 45000.0, "seconds": 2673.6764726249994, "examples_per_second": 16.83075737126088, "lr": 0.02}, "validation": {"loss": 1.4343536034584046, "accuracy": 0.4708, "examples": 5000.0, "seconds": 3029.9023736670006, "examples_per_second": 1.6502181863862}}

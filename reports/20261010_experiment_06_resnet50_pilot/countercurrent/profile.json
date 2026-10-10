@@ -1,0 +1,11 @@
+{
+  "params": 23897624,
+  "trainable_params": 23897624,
+  "macs": 51865556992,
+  "flops_approx": 103731113984,
+  "latency_ms": 546.5411659997699,
+  "peak_memory_bytes": 0,
+  "device": "mps:0",
+  "batch_size": 1,
+  "mac_scope": "Conv2d+Linear"
+}
