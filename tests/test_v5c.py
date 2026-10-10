@@ -10,6 +10,7 @@ from unittest.mock import patch
 import torch
 import yaml
 
+from countercurrent_nn.analysis.v5_boundary_intervention import boundary_intervention
 from countercurrent_nn.config import load_config
 from countercurrent_nn.engine import build_optimizer
 from countercurrent_nn.models import build_model
@@ -133,6 +134,21 @@ class DecomposedBoundaryTests(unittest.TestCase):
 
     def test_global_gain_is_positive(self):
         self.assertGreater(float(self.boundary.global_gain), 0.0)
+
+    def test_boundary_interventions_are_exact_and_temporary(self):
+        logits = torch.randn(2, 4)
+        reference = torch.randn(2, 8, 8, 8)
+        real, _ = self.boundary(logits, reference)
+        with boundary_intervention(self.boundary, "uniform"):
+            uniform, _ = self.boundary(logits, reference)
+        with boundary_intervention(self.boundary, "class_off"):
+            class_off, _ = self.boundary(logits, reference)
+        with boundary_intervention(self.boundary, "zero"):
+            zero, _ = self.boundary(logits, reference)
+        restored, _ = self.boundary(logits, reference)
+        torch.testing.assert_close(uniform, class_off)
+        torch.testing.assert_close(zero, torch.zeros_like(zero))
+        torch.testing.assert_close(restored, real)
 
     def test_gain_calibration_matches_the_reference_target_rms(self):
         boundary = DecomposedTargetBoundary(

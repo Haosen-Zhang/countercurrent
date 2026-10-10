@@ -1,0 +1,21 @@
+{
+  "examples_per_variant": 2560,
+  "countercurrent": {
+    "real": {"loss": 0.660093767940998, "accuracy": 0.775},
+    "uniform": {"loss": 0.6600586518645286, "accuracy": 0.775},
+    "shuffled": {"loss": 0.6600874051451683, "accuracy": 0.775390625},
+    "class_off": {"loss": 0.6600586518645286, "accuracy": 0.775},
+    "instance_off": {"loss": 0.7528793424367904, "accuracy": 0.76171875},
+    "base_only": {"loss": 0.7529856264591217, "accuracy": 0.76171875},
+    "zero": {"loss": 0.7566600501537323, "accuracy": 0.758984375}
+  },
+  "cocurrent": {
+    "real": {"loss": 0.656665700674057, "accuracy": 0.77265625},
+    "uniform": {"loss": 0.6566315367817879, "accuracy": 0.77265625},
+    "shuffled": {"loss": 0.6566678807139397, "accuracy": 0.77265625},
+    "class_off": {"loss": 0.6566315367817879, "accuracy": 0.77265625},
+    "instance_off": {"loss": 0.7409192442893981, "accuracy": 0.7546875},
+    "base_only": {"loss": 0.740993258357048, "accuracy": 0.75546875},
+    "zero": {"loss": 0.7474197238683701, "accuracy": 0.75390625}
+  }
+}

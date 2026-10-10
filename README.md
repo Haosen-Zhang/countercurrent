@@ -9,6 +9,8 @@ target hypothesis 作为两端 boundary，在推理阶段进行 counterflow pair
 - [V5-C 详细规范](COUNTERCURRENT_V5C_DETAILED_PLAN.md)
 - [本次审计、architecture diff 与验证报告](reports/COUNTERCURRENT_REIMPLEMENTATION_REPORT.md)
 - [V5-C architecture diff 与单批次验证](reports/20260929_V5C_REIMPLEMENTATION_REPORT.md)
+- [Experiment 05：V5-C CC/Co 20-epoch pilot](reports/20260930_experiment_05_v5c_pilot_results.md)
+- [V5-C 后续验证流程](COUNTERCURRENT_V5C_NEXT_VALIDATION_PLAN.md)
 
 2026-09-14：主模型已替换为 proposal → paired reconciliation → corrected forward resweep。
 旧代码中的 `C + Q` 只写入 diagnostics；新版把该 corrected C 作为 resweep 的实际输入。
@@ -108,6 +110,13 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --nnodes=1 --nproc-per-node=2 \
 
 Pilot 与正式 200 epochs 使用不同的 cosine schedule。正式实验应新建输出目录并从头训练，
 不要从 pilot checkpoint resume。
+
+Experiment 05 的 CC/Co pilots 已完成：测试准确率分别为 77.72%/77.73%，两组 solver
+均收敛且 exchange 未退化，但 `R_class` 均降到约 0.007，real/uniform/shuffled/class-off
+无差异，reverse gain 来自 instance branch。因此当前版本判定 No-Go，不启动 200 epochs。
+完整结果见
+[实验报告](reports/20260930_experiment_05_v5c_pilot_results.md)，下一版 guarded boundary 的
+实现与 gate 见[后续验证流程](COUNTERCURRENT_V5C_NEXT_VALIDATION_PLAN.md)。
 
 ## 实验组
 
