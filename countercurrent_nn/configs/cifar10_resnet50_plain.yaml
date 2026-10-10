@@ -20,8 +20,6 @@ training:
   warmup_epochs: 5
   amp: false
   initial_loss_weight: 0.0
-  conductance_weight_decay: 0.0
-  boundary_scalar_weight_decay: 0.0
 runtime:
   seed: 0
   device: auto

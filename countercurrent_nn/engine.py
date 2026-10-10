@@ -43,16 +43,19 @@ def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.Opt
             raise ValueError(
                 "boundary_scalar_weight_decay must be finite and nonnegative"
             )
+        # Duck-typed rather than class-gated so any decomposed boundary family
+        # qualifies.  A model without such attributes still yields an empty list
+        # and still raises below.
         boundary_scalars = [
             parameter
             for module in model.modules()
-            if isinstance(module, DecomposedTargetBoundary)
-            for parameter in (
-                module.base_scale,
-                module.class_scale,
-                module.instance_scale,
-                module.log_global_gain,
+            for name in (
+                "base_scale",
+                "class_scale",
+                "instance_scale",
+                "log_global_gain",
             )
+            if isinstance(parameter := getattr(module, name, None), nn.Parameter)
         ]
         if not boundary_scalars:
             raise ValueError(
