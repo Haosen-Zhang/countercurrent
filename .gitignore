@@ -11,3 +11,4 @@ countercurrent_nn/results/*/
 *.pt
 *.png
 dataset/
+dataset/cifar-10-python.tar.gz
