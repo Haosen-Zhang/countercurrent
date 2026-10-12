@@ -1,0 +1,27 @@
+{
+  "git_commit": "2142455",
+  "arm": "resnet50_cocurrent",
+  "device": "NVIDIA RTX 5880 Ada Generation",
+  "params": 23897624,
+  "trainable_params": 23897624,
+  "eval_upper_macs_per_sample": 60778452992,
+  "train_macs_per_sample": 7904606208,
+  "train": {
+    "loss": 1.8885378279791938,
+    "final_loss": 1.8885378279791938,
+    "accuracy": 0.333,
+    "examples": 45000.0,
+    "seconds": 48.8519952557981,
+    "examples_per_second": 921.149684150497,
+    "lr": 0.02
+  },
+  "validation": {
+    "loss": 1.3913490989685058,
+    "accuracy": 0.4748,
+    "examples": 5000.0,
+    "seconds": 17.947145083919168,
+    "examples_per_second": 278.5958422144842
+  },
+  "train_peak_memory_bytes": 9068963328,
+  "validation_peak_memory_bytes": 12188689408
+}

@@ -16,8 +16,8 @@ training:
   momentum: 0.9
   weight_decay: 0.0005
   batch_size: 128
-  epochs: 200
-  warmup_epochs: 5
+  epochs: 30
+  warmup_epochs: 2
   amp: false
   initial_loss_weight: 0.0
 runtime:
@@ -27,4 +27,9 @@ runtime:
   output_dir: countercurrent_nn/results/resnet50_plain_seed0
 diagnostics:
   max_samples: 16
-  each_epoch: false
+  each_epoch: true
+evaluation:
+  validation_fixed_steps: 8
+  validation_max_samples: 2000
+  curve_max_samples: 2000
+  iteration_steps: [1, 2, 4, 8]

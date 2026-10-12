@@ -1,0 +1,27 @@
+{
+  "git_commit": "2142455+gpu-compute-patch",
+  "arm": "resnet50_plain",
+  "device": "NVIDIA RTX 5880 Ada Generation",
+  "params": 23520842,
+  "trainable_params": 23520842,
+  "eval_upper_macs_per_sample": 1297829888,
+  "train_macs_per_sample": 1297829888,
+  "train": {
+    "loss": 1.9229129330741035,
+    "final_loss": 1.9229129330741035,
+    "accuracy": 0.31506666666666666,
+    "examples": 45000.0,
+    "seconds": 17.865942994132638,
+    "examples_per_second": 2518.75873637224,
+    "lr": 0.05
+  },
+  "validation": {
+    "loss": 1.5880519552230834,
+    "accuracy": 0.4354,
+    "examples": 5000.0,
+    "seconds": 0.7208027075976133,
+    "examples_per_second": 6936.710902022915
+  },
+  "train_peak_memory_bytes": 3518623232,
+  "validation_peak_memory_bytes": 743505408
+}

@@ -307,10 +307,22 @@ class LightweightTargetBoundary(nn.Module):
         current = combined.square().mean().sqrt().clamp_min(1e-12)
         self.log_global_gain.fill_(math.log(target_rms / float(current)))
 
-    def forward(self, logits: Tensor, reference: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(
+        self,
+        logits: Tensor,
+        reference: Tensor,
+        *,
+        return_components: bool = False,
+    ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, dict[str, Tensor]]:
         probabilities = logits.softmax(dim=-1)
         components = self.components_from_probabilities(probabilities, reference)
-        return self.global_gain * components["combined"], probabilities
+        boundary = self.global_gain * components["combined"]
+        if not return_components:
+            return boundary, probabilities
+        details = dict(components)
+        details["boundary"] = boundary
+        details["global_gain"] = self.global_gain
+        return boundary, probabilities, details
 
 class ResNet50Counterflow(nn.Module):
     """ResNet-50 whose third stage is a persistent two-boundary lattice."""
@@ -325,7 +337,7 @@ class ResNet50Counterflow(nn.Module):
         beta: float = 0.1,
         inverse_steps: int = 15,
         train_inner_steps: int = 8,
-        eval_max_steps: int = 24,
+        eval_max_steps: int = 8,
         num_outer_train: int = 1,
         num_outer_eval: int = 1,
         tolerance: float = 1e-3,
@@ -589,6 +601,7 @@ class ResNet50Counterflow(nn.Module):
         tolerance: float | None = None,
         reverse_off: bool = False,
         capture_diagnostics: bool = False,
+        capture_states: bool = True,
     ) -> tuple[Tensor, list[Tensor], dict[str, Any]]:
         """Run the two-boundary solve; return (logits, per-step logits, trace)."""
         source = self._front(x)
@@ -596,15 +609,37 @@ class ResNet50Counterflow(nn.Module):
         logits = self._classify(h_states[-1])
         iteration_logits = [logits]
 
-        boundary, probabilities = self.target_boundary(
-            self._hypothesis(h_states[-1]), h_states[-1]
+        boundary_result = self.target_boundary(
+            self._hypothesis(h_states[-1]),
+            h_states[-1],
+            return_components=capture_diagnostics,
         )
+        if capture_diagnostics:
+            boundary, probabilities, boundary_components = boundary_result
+        else:
+            boundary, probabilities = boundary_result
+            boundary_components = None
         c_states = self._initialize_c(boundary)
 
         history: list[dict[str, Any]] = []
         recorded: list[dict[str, Any]] = []
         if capture_diagnostics:
-            recorded.append(self._record(h_states, c_states, [], boundary, probabilities))
+            recorded.append(
+                self._record(
+                    h_states,
+                    c_states,
+                    [],
+                    boundary,
+                    probabilities,
+                    boundary_components,
+                    include_states=capture_states,
+                )
+            )
+
+        active = torch.ones(x.shape[0], dtype=torch.bool, device=x.device)
+        steps_per_sample = torch.zeros(
+            x.shape[0], dtype=torch.int64, device=x.device
+        )
 
         for step in range(1, steps + 1):
             h_candidate, c_candidate, cells = self._sweep(
@@ -617,31 +652,56 @@ class ResNet50Counterflow(nn.Module):
                 c_candidate,
                 source=source,
                 boundary=boundary,
+                update_mask=active if tolerance is not None else None,
             )
             logits = self._classify(h_states[-1])
             iteration_logits.append(logits)
 
-            converged = step_residual < (tolerance or 0.0)
             if tolerance is not None:
-                done = bool(converged.all())
+                steps_per_sample += active.to(steps_per_sample.dtype)
+                converged_now = active & step_residual.lt(tolerance)
+                active = active & ~converged_now
+                converged = ~active
+            else:
+                converged_now = torch.zeros_like(active)
+                converged = torch.zeros_like(active)
+                steps_per_sample += 1
+            if tolerance is not None:
+                done = not bool(active.any())
             else:
                 done = False
             history.append(
                 {
                     "step": step,
                     "residual": step_residual.detach(),
+                    "active": active.detach(),
+                    "converged_now": converged_now.detach(),
                     "cells": cells,
                     "converged": converged.detach(),
                 }
             )
             if capture_diagnostics:
                 recorded.append(
-                    self._record(h_states, c_states, cells, boundary, probabilities)
+                    self._record(
+                        h_states,
+                        c_states,
+                        cells,
+                        boundary,
+                        probabilities,
+                        boundary_components,
+                        include_states=capture_states,
+                    )
                 )
             if done:
                 break
 
-        trace: dict[str, Any] = {"history": history, "steps": len(history)}
+        trace: dict[str, Any] = {
+            "history": history,
+            "steps": len(history),
+            "steps_per_sample": steps_per_sample.detach().cpu(),
+            "converged": converged.detach().cpu() if history else torch.zeros(x.shape[0], dtype=torch.bool),
+            "boundary_components": boundary_components,
+        }
         if capture_diagnostics:
             trace["recorded"] = recorded
         return logits, iteration_logits, trace
@@ -653,19 +713,41 @@ class ResNet50Counterflow(nn.Module):
         cells: list[dict[str, Tensor]],
         boundary: Tensor | None,
         probabilities: Tensor | None,
+        boundary_components: dict[str, Tensor] | None,
+        *,
+        include_states: bool,
     ) -> dict[str, Any]:
-        return {
-            "H": [state.detach().cpu() for state in h_states],
-            "C": [state.detach().cpu() for state in c_states],
+        def rms(state: Tensor) -> Tensor:
+            return state.detach().float().flatten(1).square().mean(dim=1).sqrt().cpu()
+
+        def cosine(left: Tensor, right: Tensor) -> Tensor:
+            return F.cosine_similarity(
+                left.detach().float().flatten(1),
+                right.detach().float().flatten(1),
+                dim=1,
+            ).cpu()
+
+        record: dict[str, Any] = {
+            "H_norm": torch.stack([rms(state) for state in h_states], dim=1),
+            "C_norm": torch.stack([rms(state) for state in c_states], dim=1),
             "cells": [
-                {key: value.detach().cpu() for key, value in cell.items()}
+                {
+                    "q_norm": rms(cell["Q"]),
+                    "discrepancy": rms(cell["D"]),
+                    "cos_d_u_h": cosine(cell["D"], cell["h_bar"]),
+                }
                 for cell in cells
             ],
             "boundary": None if boundary is None else boundary.detach().cpu(),
             "probabilities": (
                 None if probabilities is None else probabilities.detach().cpu()
             ),
+            "boundary_components": boundary_components,
         }
+        if include_states:
+            record["H"] = [state.detach().cpu() for state in h_states]
+            record["C"] = [state.detach().cpu() for state in c_states]
+        return record
 
     def run_solver(self, x: Tensor) -> tuple[Tensor, list[dict[str, Any]]]:
         """Public hook for the R1-R4 diagnostic: residual history over max steps."""
@@ -679,6 +761,73 @@ class ResNet50Counterflow(nn.Module):
             for entry in trace["history"]
         ]
 
+    def _diagnostics(
+        self,
+        iteration_logits: list[Tensor],
+        trace: dict[str, Any],
+    ) -> dict[str, Tensor]:
+        history = trace["history"]
+        recorded = trace.get("recorded", [])
+        diagnostics: dict[str, Tensor] = {
+            "iter_logits": torch.stack(
+                [logits.detach().cpu() for logits in iteration_logits]
+            ),
+            "initial_logits": iteration_logits[0].detach().cpu(),
+            "solve_steps_per_sample": trace["steps_per_sample"],
+            "converged": trace["converged"],
+            "gamma": torch.stack(
+                [cell.gamma.detach().cpu().flatten() for cell in self.exchange]
+            ),
+        }
+        if recorded:
+            diagnostics["H_norm"] = torch.stack(
+                [record["H_norm"] for record in recorded]
+            ).mean(dim=1)
+            diagnostics["C_norm"] = torch.stack(
+                [record["C_norm"] for record in recorded]
+            ).mean(dim=1)
+        if history:
+            residual = torch.stack(
+                [entry["residual"].detach().cpu() for entry in history]
+            )
+            diagnostics["equation_residual"] = residual
+            diagnostics["step_residual"] = residual
+            diagnostics["residual"] = residual.mean(dim=1)
+            for key in ("q_norm", "discrepancy", "cos_d_u_h"):
+                values = torch.stack(
+                    [
+                        torch.stack([cell[key] for cell in record["cells"]], dim=1)
+                        for record in recorded[1:]
+                    ]
+                )
+                diagnostics[key] = values.mean(dim=1)
+
+        components = trace.get("boundary_components")
+        if isinstance(components, dict):
+            boundary_norm = components["boundary"].detach().float().flatten(1).norm(dim=1)
+            gain = components["global_gain"].detach().float()
+            raw = torch.stack(
+                [
+                    components[name].detach().float().flatten(1).square().mean(dim=1).sqrt()
+                    for name in ("base", "class", "instance")
+                ],
+                dim=1,
+            )
+            weighted = torch.stack(
+                [
+                    (gain * components[name].detach().float()).flatten(1).norm(dim=1)
+                    for name in ("weighted_base", "weighted_class", "weighted_instance")
+                ],
+                dim=1,
+            )
+            diagnostics["boundary_component_rms"] = raw.mean(dim=0, keepdim=True).cpu()
+            diagnostics["boundary_component_norm"] = weighted.mean(dim=0, keepdim=True).cpu()
+            diagnostics["boundary_component_ratio"] = (
+                weighted / boundary_norm[:, None].clamp_min(1e-12)
+            ).mean(dim=0, keepdim=True).cpu()
+            diagnostics["boundary_global_gain"] = gain.reshape(1).cpu()
+        return diagnostics
+
     # ----------------------------------------------------------------- forward
 
     def _run(
@@ -688,6 +837,7 @@ class ResNet50Counterflow(nn.Module):
         capture_diagnostics: bool,
         reverse_off: bool,
         adaptive: bool,
+        fixed_steps: int | None = None,
     ) -> tuple[Tensor, list[Tensor], dict[str, Any]]:
         if not self.exchange_enabled:
             # Architecture control.  With the exchange removed the reverse
@@ -700,8 +850,33 @@ class ResNet50Counterflow(nn.Module):
             logits = self._classify(states[-1])
             trace: dict[str, Any] = {"history": [], "steps": 0}
             if capture_diagnostics:
-                trace["recorded"] = [self._record(states, states, [], source, None)]
+                trace["recorded"] = [
+                    self._record(
+                        states,
+                        states,
+                        [],
+                        source,
+                        None,
+                        None,
+                        include_states=False,
+                    )
+                ]
+                trace["steps_per_sample"] = torch.zeros(
+                    x.shape[0], dtype=torch.int64
+                )
+                trace["converged"] = torch.ones(x.shape[0], dtype=torch.bool)
             return logits, [logits], trace
+        if fixed_steps is not None:
+            if fixed_steps < 0:
+                raise ValueError("fixed_steps must be nonnegative")
+            return self.solve(
+                x,
+                steps=fixed_steps,
+                tolerance=None,
+                reverse_off=reverse_off,
+                capture_diagnostics=capture_diagnostics,
+                capture_states=False,
+            )
         if not adaptive:
             steps = self.train_inner_steps * self.num_outer_train
             return self.solve(
@@ -710,6 +885,7 @@ class ResNet50Counterflow(nn.Module):
                 tolerance=None,
                 reverse_off=reverse_off,
                 capture_diagnostics=capture_diagnostics,
+                capture_states=False,
             )
         return self.solve(
             x,
@@ -717,11 +893,22 @@ class ResNet50Counterflow(nn.Module):
             tolerance=self.tolerance,
             reverse_off=reverse_off,
             capture_diagnostics=capture_diagnostics,
+            capture_states=False,
         )
 
-    def predict_iterations(self, x: Tensor, *, reverse_off: bool = False) -> Tensor:
+    def predict_iterations(
+        self,
+        x: Tensor,
+        *,
+        reverse_off: bool = False,
+        steps: int | None = None,
+    ) -> Tensor:
         _, logits, _ = self._run(
-            x, capture_diagnostics=False, reverse_off=reverse_off, adaptive=False
+            x,
+            capture_diagnostics=False,
+            reverse_off=reverse_off,
+            adaptive=False,
+            fixed_steps=steps,
         )
         return torch.stack(logits)
 
@@ -733,6 +920,7 @@ class ResNet50Counterflow(nn.Module):
         reverse_off: bool = False,
         return_initial_logits: bool = False,
         adaptive: bool | None = None,
+        fixed_steps: int | None = None,
     ) -> Tensor | tuple[Tensor, Tensor] | tuple[Tensor, dict[str, Any]]:
         if return_diagnostics and return_initial_logits:
             raise ValueError("request diagnostics or initial logits, not both")
@@ -743,10 +931,13 @@ class ResNet50Counterflow(nn.Module):
             capture_diagnostics=return_diagnostics,
             reverse_off=reverse_off,
             adaptive=adaptive,
+            fixed_steps=fixed_steps,
         )
         if return_initial_logits:
             return logits, iterations[0]
-        return (logits, diagnostics) if return_diagnostics else logits
+        if return_diagnostics:
+            return logits, self._diagnostics(iterations, diagnostics)
+        return logits
 
     def extra_repr(self) -> str:
         return (

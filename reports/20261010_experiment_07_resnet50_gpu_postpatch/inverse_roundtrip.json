@@ -1,0 +1,15 @@
+{
+  "device": "NVIDIA RTX 5880 Ada Generation",
+  "inverse_steps": 3,
+  "threshold": 0.0001,
+  "block_relative_errors": [
+    3.334e-7,
+    3.528e-7,
+    3.726e-7,
+    3.253e-7,
+    3.015e-7
+  ],
+  "max_block_relative_error": 3.7259e-7,
+  "five_block_chain_relative_error": 8.2831e-7,
+  "passed": true
+}

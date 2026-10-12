@@ -213,6 +213,7 @@ def evaluate(
     *,
     limit_batches: int | None = None,
     forward_kwargs: Mapping[str, Any] | None = None,
+    max_samples: int | None = None,
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
@@ -222,6 +223,12 @@ def evaluate(
     for batch_index, (images, targets) in enumerate(loader):
         if limit_batches is not None and batch_index >= limit_batches:
             break
+        if max_samples is not None:
+            remaining = max_samples - total_examples
+            if remaining <= 0:
+                break
+            images = images[:remaining]
+            targets = targets[:remaining]
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         logits = model(images, **dict(forward_kwargs or {}))
@@ -240,6 +247,120 @@ def evaluate(
         "seconds": elapsed,
         "examples_per_second": total_examples / max(elapsed, 1e-12),
     }
+
+
+@torch.inference_mode()
+def evaluate_iteration_budgets(
+    model: nn.Module,
+    loader: Iterable[tuple[Tensor, Tensor]],
+    device: torch.device,
+    *,
+    steps: tuple[int, ...] = (1, 2, 4, 8),
+    max_samples: int = 2000,
+    reverse_off: bool = False,
+) -> dict[str, Any]:
+    """Evaluate fixed solver budgets on one shared deterministic subset."""
+    if not steps or any(step < 0 for step in steps):
+        raise ValueError("steps must contain nonnegative fixed budgets")
+    model.eval()
+    predictor = getattr(model, "predict_iterations", None)
+    predictor_parameters = (
+        inspect.signature(predictor).parameters if callable(predictor) else {}
+    )
+    correct = {step: 0 for step in steps}
+    loss_sum = {step: 0.0 for step in steps}
+    total_examples = 0
+    criterion = nn.CrossEntropyLoss(reduction="sum")
+    start = time.perf_counter()
+    for images, targets in loader:
+        remaining = max_samples - total_examples
+        if remaining <= 0:
+            break
+        images = images[:remaining].to(device, non_blocking=True)
+        targets = targets[:remaining].to(device, non_blocking=True)
+        if callable(predictor):
+            kwargs: dict[str, Any] = {}
+            if "reverse_off" in predictor_parameters:
+                kwargs["reverse_off"] = reverse_off
+            if "steps" in predictor_parameters:
+                kwargs["steps"] = max(steps)
+            trajectory = predictor(images, **kwargs)
+        else:
+            trajectory = model(images).unsqueeze(0)
+        for step in steps:
+            logits = trajectory[min(step, trajectory.shape[0] - 1)]
+            loss_sum[step] += float(criterion(logits, targets))
+            correct[step] += top1_correct(logits, targets)
+        total_examples += targets.shape[0]
+    if total_examples == 0:
+        raise RuntimeError("evaluation loader yielded no batches")
+    return {
+        "examples": total_examples,
+        "seconds": time.perf_counter() - start,
+        "steps": {
+            str(step): {
+                "loss": loss_sum[step] / total_examples,
+                "accuracy": correct[step] / total_examples,
+            }
+            for step in steps
+        },
+    }
+
+
+@torch.inference_mode()
+def evaluate_adaptive_solver(
+    model: nn.Module,
+    loader: Iterable[tuple[Tensor, Tensor]],
+    criterion: nn.Module,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Run adaptive inference once and report accuracy plus solve-step distribution."""
+    parameters = inspect.signature(model.forward).parameters
+    if "return_diagnostics" not in parameters or "adaptive" not in parameters:
+        metrics = evaluate(model, loader, criterion, device)
+        return {**metrics, "solve_steps": None}
+    model.eval()
+    total_loss = 0.0
+    total_correct = 0
+    total_examples = 0
+    all_steps: list[Tensor] = []
+    start = time.perf_counter()
+    for images, targets in loader:
+        images = images.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+        logits, diagnostics = model(
+            images, return_diagnostics=True, adaptive=True
+        )
+        batch_size = targets.shape[0]
+        total_loss += float(criterion(logits, targets)) * batch_size
+        total_correct += top1_correct(logits, targets)
+        total_examples += batch_size
+        steps = diagnostics.get("solve_steps_per_sample")
+        if isinstance(steps, Tensor):
+            all_steps.append(steps.to(torch.int64).cpu())
+    if total_examples == 0:
+        raise RuntimeError("evaluation loader yielded no batches")
+    report: dict[str, Any] = {
+        "loss": total_loss / total_examples,
+        "accuracy": total_correct / total_examples,
+        "examples": float(total_examples),
+        "seconds": time.perf_counter() - start,
+    }
+    if all_steps:
+        values = torch.cat(all_steps).float()
+        unique, counts = torch.unique(values.to(torch.int64), return_counts=True)
+        report["solve_steps"] = {
+            "mean": float(values.mean()),
+            "median": float(values.median()),
+            "p90": float(torch.quantile(values, 0.9)),
+            "histogram": {
+                str(int(step)): int(count)
+                for step, count in zip(unique, counts, strict=True)
+            },
+        }
+    else:
+        report["solve_steps"] = None
+    return report
 
 
 @torch.inference_mode()
@@ -328,6 +449,7 @@ def collect_diagnostics(
     *,
     max_samples: int = 16,
     reverse_off: bool = False,
+    forward_kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect one small batch; full lattice histories intentionally stay opt-in."""
     if "return_diagnostics" not in inspect.signature(model.forward).parameters:
@@ -337,7 +459,7 @@ def collect_diagnostics(
     images = images[:max_samples].to(device)
     targets = targets[:max_samples]
     parameters = inspect.signature(model.forward).parameters
-    kwargs: dict[str, Any] = {"return_diagnostics": True}
+    kwargs: dict[str, Any] = {"return_diagnostics": True, **dict(forward_kwargs or {})}
     if "reverse_off" in parameters:
         kwargs["reverse_off"] = reverse_off
     result = model(images, **kwargs)
@@ -375,6 +497,7 @@ def summarize_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
         "cos_d_u_h",
         "cos_q_u_h",
         "boundary_component_norm",
+        "boundary_component_rms",
         "boundary_component_ratio",
         "boundary_global_gain",
     ):

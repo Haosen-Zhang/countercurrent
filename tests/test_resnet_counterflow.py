@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import torch
+import yaml
 
 from countercurrent_nn.models import build_model
 from countercurrent_nn.models.resnet_counterflow import (
@@ -48,6 +50,15 @@ class InvertibleBottleneckTests(unittest.TestCase):
         with torch.no_grad():
             recovered = block.inverse(block(x))
         self.assertLess(float((recovered - x).norm() / x.norm()), 1e-5)
+
+    def test_three_inverse_steps_meet_the_registered_roundtrip_threshold(self):
+        block = InvertibleBottleneck(
+            64, 16, num_groups=8, beta=0.1, inverse_steps=3
+        ).eval()
+        x = torch.randn(2, 64, 8, 8)
+        with torch.no_grad():
+            recovered = block.inverse(block(x))
+        self.assertLess(float((recovered - x).norm() / x.norm()), 1e-4)
 
     def test_inverse_is_a_smaller_contraction_for_smaller_beta(self):
         x = torch.randn(2, 64, 8, 8)
@@ -125,6 +136,18 @@ class BoundaryTests(unittest.TestCase):
             after = float(module(logits, reference)[0].square().mean().sqrt())
         self.assertAlmostEqual(after / before, 2.0, places=3)
 
+    def test_boundary_can_return_mechanism_components(self):
+        boundary = self.make()
+        output, probabilities, components = boundary(
+            torch.zeros(2, 10),
+            torch.randn(2, 64, 8, 8),
+            return_components=True,
+        )
+        self.assertEqual(output.shape, (2, 64, 8, 8))
+        self.assertEqual(probabilities.shape, (2, 10))
+        self.assertIn("weighted_class", components)
+        torch.testing.assert_close(output, components["boundary"])
+
 
 class FairnessTests(unittest.TestCase):
     def test_parameter_counts_are_close(self):
@@ -198,6 +221,70 @@ class SolverTests(unittest.TestCase):
         with torch.no_grad():
             trajectory = model.predict_iterations(torch.randn(2, 3, 32, 32))
         self.assertEqual(trajectory.shape[0], model.train_inner_steps + 1)
+
+    def test_fixed_budget_returns_requested_trajectory(self):
+        model = tiny("resnet50_countercurrent").eval()
+        with torch.no_grad():
+            trajectory = model.predict_iterations(
+                torch.randn(2, 3, 32, 32), steps=8
+            )
+        self.assertEqual(trajectory.shape[0], 9)
+
+    def test_adaptive_solver_reports_per_sample_steps(self):
+        model = tiny("resnet50_countercurrent", tolerance=1e9).eval()
+        with torch.no_grad():
+            _, diagnostics = model(
+                torch.randn(2, 3, 32, 32), return_diagnostics=True
+            )
+        torch.testing.assert_close(
+            diagnostics["solve_steps_per_sample"], torch.ones(2, dtype=torch.int64)
+        )
+        self.assertTrue(bool(diagnostics["converged"].all()))
+
+    def test_compact_diagnostics_include_registered_mechanisms(self):
+        model = tiny("resnet50_countercurrent").eval()
+        with torch.no_grad():
+            _, diagnostics = model(
+                torch.randn(2, 3, 32, 32),
+                return_diagnostics=True,
+                fixed_steps=2,
+            )
+        for key in (
+            "q_norm",
+            "cos_d_u_h",
+            "boundary_component_rms",
+            "boundary_component_ratio",
+            "equation_residual",
+        ):
+            self.assertIn(key, diagnostics)
+            self.assertTrue(torch.isfinite(diagnostics[key]).all())
+
+
+class PilotConfigTests(unittest.TestCase):
+    def test_registered_gpu_pilot_protocol_is_identical_across_arms(self):
+        root = Path(__file__).parents[1] / "countercurrent_nn" / "configs"
+        configs = {}
+        for arm in (
+            "plain",
+            "lattice_control",
+            "countercurrent",
+            "cocurrent",
+        ):
+            with (root / f"cifar10_resnet50_{arm}.yaml").open() as handle:
+                configs[arm] = yaml.safe_load(handle)
+            self.assertEqual(configs[arm]["training"]["epochs"], 30)
+            self.assertEqual(configs[arm]["training"]["warmup_epochs"], 2)
+            self.assertEqual(configs[arm]["training"]["batch_size"], 128)
+            self.assertEqual(configs[arm]["evaluation"]["iteration_steps"], [1, 2, 4, 8])
+            self.assertEqual(configs[arm]["evaluation"]["validation_max_samples"], 2000)
+        for arm in ("lattice_control", "countercurrent", "cocurrent"):
+            self.assertEqual(configs[arm]["model"]["inverse_steps"], 3)
+            self.assertEqual(configs[arm]["model"]["eval_max_steps"], 8)
+        counter = dict(configs["countercurrent"]["model"])
+        co = dict(configs["cocurrent"]["model"])
+        counter.pop("name")
+        co.pop("name")
+        self.assertEqual(counter, co)
 
 
 class ContractTests(unittest.TestCase):

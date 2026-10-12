@@ -19,6 +19,8 @@ from countercurrent_nn.engine import (
     build_optimizer,
     collect_diagnostics,
     evaluate,
+    evaluate_adaptive_solver,
+    evaluate_iteration_budgets,
     evaluate_refinement,
     summarize_diagnostics,
     summarize_v5_mechanisms,
@@ -208,6 +210,15 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
         torch.cuda.reset_peak_memory_stats(device)
     wall_start = time.perf_counter()
     selection_loader = data.validation if data.validation is not None else data.test
+    evaluation_config = config.get("evaluation", {})
+    validation_fixed_steps = evaluation_config.get("validation_fixed_steps")
+    validation_max_samples = evaluation_config.get("validation_max_samples")
+    forward_parameters = inspect.signature(model.forward).parameters
+    validation_forward_kwargs = (
+        {"fixed_steps": int(validation_fixed_steps)}
+        if validation_fixed_steps is not None and "fixed_steps" in forward_parameters
+        else None
+    )
     for epoch in range(start_epoch, epochs):
         if hasattr(data.train.sampler, "set_epoch"):
             data.train.sampler.set_epoch(epoch)
@@ -236,6 +247,13 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
             criterion,
             device,
             limit_batches=args.limit_eval_batches,
+            forward_kwargs=validation_forward_kwargs,
+            max_samples=(
+                int(validation_max_samples)
+                if validation_max_samples is not None
+                and args.limit_eval_batches is None
+                else None
+            ),
         )
         row = {
             "epoch": epoch,
@@ -249,6 +267,7 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
                 selection_loader,
                 device,
                 max_samples=int(diagnostic_config.get("max_samples", 16)),
+                forward_kwargs=validation_forward_kwargs,
             )
             mechanisms = summarize_v5_mechanisms(epoch_diagnostics)
             if mechanisms:
@@ -290,19 +309,34 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
 
     best_checkpoint = torch.load(output_dir / "best.pt", map_location=device, weights_only=False)
     model.load_state_dict(best_checkpoint["model_state"])
-    test_metrics = evaluate(
-        model,
-        data.test,
-        criterion,
-        device,
-        limit_batches=args.limit_eval_batches,
-    )
-    refinement_metrics = evaluate_refinement(
-        model,
-        data.test,
-        device,
-        limit_batches=args.limit_eval_batches,
-    )
+    supports_fixed_steps = "fixed_steps" in inspect.signature(model.forward).parameters
+    if supports_fixed_steps and args.limit_eval_batches is None:
+        test_metrics = evaluate_adaptive_solver(model, data.test, criterion, device)
+        curve_steps = tuple(
+            int(step)
+            for step in evaluation_config.get("iteration_steps", (1, 2, 4, 8))
+        )
+        refinement_metrics = evaluate_iteration_budgets(
+            model,
+            selection_loader,
+            device,
+            steps=curve_steps,
+            max_samples=int(evaluation_config.get("curve_max_samples", 2000)),
+        )
+    else:
+        test_metrics = evaluate(
+            model,
+            data.test,
+            criterion,
+            device,
+            limit_batches=args.limit_eval_batches,
+        )
+        refinement_metrics = evaluate_refinement(
+            model,
+            data.test,
+            device,
+            limit_batches=args.limit_eval_batches,
+        )
     supports_reverse_off = "reverse_off" in inspect.signature(model.forward).parameters
     reverse_off_metrics: dict[str, Any] = {}
     reverse_off_refinement: dict[str, Any] = {}
@@ -313,21 +347,43 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
             criterion,
             device,
             limit_batches=args.limit_eval_batches,
-            forward_kwargs={"reverse_off": True},
+            forward_kwargs={
+                "reverse_off": True,
+                **(
+                    {"fixed_steps": int(validation_fixed_steps)}
+                    if supports_fixed_steps and validation_fixed_steps is not None
+                    else {}
+                ),
+            },
         )
-        reverse_off_refinement = evaluate_refinement(
-            model,
-            data.test,
-            device,
-            limit_batches=args.limit_eval_batches,
-            reverse_off=True,
-        )
+        if supports_fixed_steps and args.limit_eval_batches is None:
+            reverse_off_refinement = evaluate_iteration_budgets(
+                model,
+                selection_loader,
+                device,
+                steps=curve_steps,
+                max_samples=int(evaluation_config.get("curve_max_samples", 2000)),
+                reverse_off=True,
+            )
+        else:
+            reverse_off_refinement = evaluate_refinement(
+                model,
+                data.test,
+                device,
+                limit_batches=args.limit_eval_batches,
+                reverse_off=True,
+            )
     diagnostic_config = config.get("diagnostics", {})
     diagnostics = collect_diagnostics(
         model,
         data.test,
         device,
         max_samples=int(diagnostic_config.get("max_samples", 16)),
+        forward_kwargs=(
+            {"fixed_steps": int(validation_fixed_steps)}
+            if supports_fixed_steps and validation_fixed_steps is not None
+            else None
+        ),
     )
     if diagnostics:
         torch.save(diagnostics, output_dir / "diagnostics.pt")
