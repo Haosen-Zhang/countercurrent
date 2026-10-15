@@ -1,0 +1,192 @@
+{
+  "seed_count": 1,
+  "seed": 0,
+  "fixed_test_steps": 8,
+  "arms": {
+    "plain": {
+      "status": "completed",
+      "epochs": 30,
+      "best_epoch": 29,
+      "fixed8_test_recheck": {
+        "accuracy": 0.9248,
+        "loss": 0.2616514582395554,
+        "examples": 10000,
+        "seconds": 1.7119407179998234
+      },
+      "mean_train_seconds": 10.88576837759465,
+      "mean_validation_seconds": 0.2596594420572122,
+      "fixed_budget_macs": {
+        "1": 1297829888,
+        "2": 1297829888,
+        "4": 1297829888,
+        "8": 1297829888
+      }
+    },
+    "lattice_control": {
+      "status": "completed",
+      "epochs": 30,
+      "best_epoch": 29,
+      "fixed8_test_recheck": {
+        "accuracy": 0.9246,
+        "loss": 0.2436102137863636,
+        "examples": 10000,
+        "seconds": 1.4161987119987316
+      },
+      "mean_train_seconds": 11.330916663383444,
+      "mean_validation_seconds": 0.26415443668762845,
+      "fixed_budget_macs": {
+        "1": 1297829888,
+        "2": 1297829888,
+        "4": 1297829888,
+        "8": 1297829888
+      }
+    },
+    "countercurrent": {
+      "status": "completed",
+      "epochs": 30,
+      "best_epoch": 5,
+      "fixed8_test_recheck": {
+        "accuracy": 0.7551,
+        "loss": 0.7000217247009277,
+        "examples": 10000,
+        "seconds": 16.808441875000426
+      },
+      "mean_train_seconds": 31.617053182500605,
+      "mean_validation_seconds": 3.595172634766762,
+      "fixed_budget_macs": {
+        "1": 4788217856,
+        "2": 6835058688,
+        "4": 10928740352,
+        "8": 19116103680
+      },
+      "mechanisms": {
+        "epoch1_R_class": 0.017164574936032295,
+        "epoch30_R_class": 2.521445310321724e-07,
+        "class_ratio_reduction_factor": 68074.34952393308,
+        "epoch1_effective_boundary_rms": [
+          0.5315757393836975,
+          0.009321305900812149,
+          0.11104941368103027
+        ],
+        "epoch30_effective_boundary_rms": [
+          0.4733554422855377,
+          1.55062721773902e-07,
+          0.3904326558113098
+        ],
+        "selected_checkpoint_test_boundary_ratios": [
+          0.9976546764373779,
+          0.0004692926595453173,
+          0.0684439018368721
+        ],
+        "selected_checkpoint_test_boundary_effective_rms": [
+          2.335036039352417,
+          0.0010983787942677736,
+          0.16019487380981445
+        ],
+        "selected_checkpoint_cos_D_uH_per_layer": [
+          0.1892692744731903,
+          -0.06541913002729416,
+          -0.2833750247955322,
+          -0.4282916188240051,
+          -0.5030762553215027
+        ],
+        "selected_checkpoint_Q_rms_per_layer_mean": [
+          0.1165324435569346,
+          0.11088474746793509,
+          0.10580903058871627,
+          0.10183725925162435,
+          0.09941052831709385
+        ],
+        "selected_checkpoint_Q_rms_per_layer_p10": [
+          0.11610767245292664,
+          0.11048131063580513,
+          0.10542411357164383,
+          0.10146799311041832,
+          0.0990511067211628
+        ],
+        "selected_checkpoint_Q_rms_per_layer_p90": [
+          0.11717701330780983,
+          0.11149680614471436,
+          0.10639310255646706,
+          0.1023997850716114,
+          0.09996185079216957
+        ],
+        "Q_distribution_sample_count": 16,
+        "selected_checkpoint_boundary_scalars": {
+          "base_scale": 0.886984646320343,
+          "class_scale": 1.0025564432144165,
+          "instance_scale": 0.3446274399757385,
+          "global_gain": 5.30255126953125
+        }
+      },
+      "trained_roundtrip_relative_error": 6.061873136786744e-06,
+      "frozen_interventions": {
+        "class_off": {
+          "accuracy": 0.7561,
+          "loss": 0.7015712191581726,
+          "examples": 10000,
+          "seconds": 17.29181767800037,
+          "drop_pp": -0.10000000000000009
+        },
+        "instance_off": {
+          "accuracy": 0.756,
+          "loss": 0.7024818224906921,
+          "examples": 10000,
+          "seconds": 17.43470331199933,
+          "drop_pp": -0.09000000000000119
+        },
+        "base_off": {
+          "accuracy": 0.7496,
+          "loss": 0.7134698822975158,
+          "examples": 10000,
+          "seconds": 17.424473365001177,
+          "drop_pp": 0.5499999999999949
+        }
+      }
+    },
+    "cocurrent": {
+      "status": "not completed"
+    }
+  },
+  "paired_tests": {
+    "plain": {
+      "cc_only_correct": 206,
+      "other_only_correct": 1903,
+      "difference_pp": -16.969999999999995,
+      "mcnemar_exact_two_sided_p": 0.0,
+      "scope": "paired test examples within seed 0; not a multi-seed significance test",
+      "mcnemar_exact_two_sided_log10_p": -343.00657294168536
+    },
+    "lattice_control": {
+      "cc_only_correct": 187,
+      "other_only_correct": 1882,
+      "difference_pp": -16.95,
+      "mcnemar_exact_two_sided_p": 0.0,
+      "scope": "paired test examples within seed 0; not a multi-seed significance test",
+      "mcnemar_exact_two_sided_log10_p": -351.35932147339867
+    }
+  },
+  "baseline_pair": {
+    "plain_only_correct": 303,
+    "control_only_correct": 301,
+    "mcnemar_exact_two_sided_p": 0.9675479725539858,
+    "scope": "test examples within one seed, not training-seed uncertainty"
+  },
+  "decision": {
+    "gates": {
+      "cc_minus_control_at_least_0_5_pp": false,
+      "reverse_off_drop_at_least_1_pp": false,
+      "fixed_test_curve_monotonic": false
+    },
+    "cc_minus_control_pp": -16.95,
+    "reverse_off_drop_pp": 0.32999999999999696,
+    "test_iteration_accuracy": [
+      0.7531,
+      0.754,
+      0.757,
+      0.7551
+    ],
+    "step_d_permitted": false,
+    "verdict": "NO-GO: stop before Co or extra seeds"
+  }
+}

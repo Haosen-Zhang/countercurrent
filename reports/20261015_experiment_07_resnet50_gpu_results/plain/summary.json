@@ -1,0 +1,27 @@
+{
+  "model": "resnet50_plain",
+  "inference_version": 0,
+  "seed": 0,
+  "world_size": 2,
+  "global_batch_size": 128,
+  "per_rank_batch_size": 64,
+  "params": 23520842,
+  "trainable_params": 23520842,
+  "macs": 1297829888,
+  "flops_approx": 2595659776,
+  "best_selection_accuracy": 0.934,
+  "test": {
+    "loss": 0.2616514582395554,
+    "accuracy": 0.9248,
+    "examples": 10000.0,
+    "seconds": 1.2719211038202047,
+    "examples_per_second": 7862.12287064432
+  },
+  "refinement": {},
+  "reverse_off_test": {},
+  "reverse_off_refinement": {},
+  "reverse_accuracy_drop": null,
+  "wall_time_seconds": 343.9764850605279,
+  "peak_memory_bytes": 1972819968,
+  "synthetic_data": false
+}

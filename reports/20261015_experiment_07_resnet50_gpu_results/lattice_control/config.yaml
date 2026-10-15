@@ -1,0 +1,58 @@
+experiment: resnet50_lattice_control
+dataset:
+  name: cifar10
+  root: /localhome/zhanghs/Countercurrent/dataset
+  download: false
+  val_size: 5000
+  split_seed: 0
+  num_workers: 2
+  pin_memory: false
+model:
+  name: resnet50_lattice_control
+  num_classes: 10
+  lattice_blocks: 5
+  num_groups: 32
+  beta: 0.1
+  inverse_steps: 3
+  train_inner_steps: 2
+  eval_max_steps: 8
+  num_outer_train: 1
+  num_outer_eval: 1
+  tolerance: 0.001
+  damping: 0.5
+  conductance_max: 0.49
+  conductance_init_logit: -2.2
+  class_rank: 32
+  boundary_base_scale: 0.15
+  boundary_class_scale: 1.0
+  boundary_instance_scale: 0.1
+  boundary_target_rms: 0.55
+training:
+  optimizer: sgd
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+  batch_size: 128
+  epochs: 30
+  warmup_epochs: 2
+  amp: false
+  initial_loss_weight: 0.0
+  conductance_weight_decay: 0.0
+  boundary_scalar_weight_decay: 0.0
+runtime:
+  seed: 0
+  device: cuda
+  deterministic: false
+  output_dir: /localhome/zhanghs/Countercurrent/countercurrent_nn/results/experiment07_resnet50_lattice_control_seed0
+diagnostics:
+  max_samples: 16
+  each_epoch: true
+evaluation:
+  validation_fixed_steps: 8
+  validation_max_samples: 2000
+  curve_max_samples: 2000
+  iteration_steps:
+  - 1
+  - 2
+  - 4
+  - 8

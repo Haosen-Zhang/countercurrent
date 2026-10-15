@@ -1,0 +1,111 @@
+{
+  "model": "resnet50_countercurrent",
+  "inference_version": 0,
+  "seed": 0,
+  "world_size": 2,
+  "global_batch_size": 128,
+  "per_rank_batch_size": 64,
+  "params": 23897624,
+  "trainable_params": 23897624,
+  "macs": 19116103680,
+  "flops_approx": 38232207360,
+  "best_selection_accuracy": 0.7705,
+  "test": {
+    "loss": 0.7000217247009277,
+    "accuracy": 0.7551,
+    "examples": 10000.0,
+    "seconds": 17.52584967200164,
+    "examples_per_second": 570.5857454646244
+  },
+  "adaptive_test": {
+    "loss": 0.7000217247009277,
+    "accuracy": 0.7551,
+    "examples": 10000.0,
+    "seconds": 25.79764921199967,
+    "solve_steps": {
+      "mean": 8.0,
+      "median": 8.0,
+      "p90": 8.0,
+      "histogram": {
+        "8": 10000
+      }
+    }
+  },
+  "refinement": {
+    "examples": 10000,
+    "seconds": 17.65750042199943,
+    "steps": {
+      "1": {
+        "loss": 0.7136331734657287,
+        "accuracy": 0.7531
+      },
+      "2": {
+        "loss": 0.7090319558143616,
+        "accuracy": 0.754
+      },
+      "4": {
+        "loss": 0.7025364965438843,
+        "accuracy": 0.757
+      },
+      "8": {
+        "loss": 0.7000217247009277,
+        "accuracy": 0.7551
+      }
+    }
+  },
+  "validation_refinement": {
+    "examples": 2000,
+    "seconds": 3.6176579439998022,
+    "steps": {
+      "1": {
+        "loss": 0.6624325189590454,
+        "accuracy": 0.771
+      },
+      "2": {
+        "loss": 0.6577879285812378,
+        "accuracy": 0.7715
+      },
+      "4": {
+        "loss": 0.6511625013351441,
+        "accuracy": 0.778
+      },
+      "8": {
+        "loss": 0.6484844427108765,
+        "accuracy": 0.7705
+      }
+    }
+  },
+  "reverse_off_test": {
+    "loss": 0.7191487986564636,
+    "accuracy": 0.7518,
+    "examples": 10000.0,
+    "seconds": 17.40142424499936,
+    "examples_per_second": 574.6656054819016
+  },
+  "reverse_off_refinement": {
+    "examples": 2000,
+    "seconds": 3.5544186490005814,
+    "steps": {
+      "1": {
+        "loss": 0.6679972376823425,
+        "accuracy": 0.7695
+      },
+      "2": {
+        "loss": 0.6679972376823425,
+        "accuracy": 0.7695
+      },
+      "4": {
+        "loss": 0.6679972376823425,
+        "accuracy": 0.7695
+      },
+      "8": {
+        "loss": 0.6679972376823425,
+        "accuracy": 0.7695
+      }
+    }
+  },
+  "reverse_accuracy_drop": 0.0032999999999999696,
+  "wall_time_seconds": 1152.8215346219986,
+  "peak_memory_bytes": 4746709504,
+  "synthetic_data": false
+}
