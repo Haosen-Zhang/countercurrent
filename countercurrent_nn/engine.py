@@ -498,6 +498,8 @@ def summarize_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
         "cos_q_u_h",
         "boundary_component_norm",
         "boundary_component_rms",
+        "weighted_boundary_component_rms",
+        "q_rms_final_per_sample",
         "boundary_component_ratio",
         "boundary_global_gain",
     ):

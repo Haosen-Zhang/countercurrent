@@ -253,11 +253,21 @@ class SolverTests(unittest.TestCase):
             "q_norm",
             "cos_d_u_h",
             "boundary_component_rms",
+            "weighted_boundary_component_rms",
+            "q_rms_final_per_sample",
             "boundary_component_ratio",
             "equation_residual",
         ):
             self.assertIn(key, diagnostics)
             self.assertTrue(torch.isfinite(diagnostics[key]).all())
+
+    def test_short_unroll_leaves_only_the_first_three_exchange_parameters_unused(self):
+        model = tiny("resnet50_countercurrent", lattice_blocks=5, inverse_steps=3)
+        model.train()
+        logits = model(torch.randn(2, 3, 32, 32))
+        torch.nn.functional.cross_entropy(logits, torch.tensor([0, 1])).backward()
+        unused = [name for name, value in model.named_parameters() if value.grad is None]
+        self.assertEqual(unused, [f"exchange.{i}.logit_gamma" for i in range(3)])
 
 
 class PilotConfigTests(unittest.TestCase):

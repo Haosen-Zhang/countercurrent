@@ -801,6 +801,8 @@ class ResNet50Counterflow(nn.Module):
                     ]
                 )
                 diagnostics[key] = values.mean(dim=1)
+                if key == "q_norm":
+                    diagnostics["q_rms_final_per_sample"] = values[-1]
 
         components = trace.get("boundary_components")
         if isinstance(components, dict):
@@ -822,6 +824,9 @@ class ResNet50Counterflow(nn.Module):
             )
             diagnostics["boundary_component_rms"] = raw.mean(dim=0, keepdim=True).cpu()
             diagnostics["boundary_component_norm"] = weighted.mean(dim=0, keepdim=True).cpu()
+            diagnostics["weighted_boundary_component_rms"] = (
+                weighted.mean(dim=0, keepdim=True) / math.sqrt(components["boundary"][0].numel())
+            ).cpu()
             diagnostics["boundary_component_ratio"] = (
                 weighted / boundary_norm[:, None].clamp_min(1e-12)
             ).mean(dim=0, keepdim=True).cpu()

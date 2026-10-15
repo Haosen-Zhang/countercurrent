@@ -1,0 +1,73 @@
+{
+  "model": "resnet50_countercurrent",
+  "inference_version": 0,
+  "seed": 0,
+  "world_size": 2,
+  "global_batch_size": 128,
+  "per_rank_batch_size": 64,
+  "params": 23897624,
+  "trainable_params": 23897624,
+  "macs": 19116103680,
+  "flops_approx": 38232207360,
+  "best_selection_accuracy": 0.109375,
+  "test": {
+    "loss": 2.735537052154541,
+    "accuracy": 0.09375,
+    "examples": 64.0,
+    "seconds": 0.22447479000038584,
+    "examples_per_second": 285.10996713657687
+  },
+  "refinement": {
+    "iteration_accuracy": [
+      0.09375,
+      0.09375,
+      0.09375
+    ],
+    "iteration_confidence": [
+      0.1661062240600586,
+      0.16625791788101196,
+      0.1665024757385254
+    ],
+    "iteration_entropy": [
+      2.1356518268585205,
+      2.1353774070739746,
+      2.134911298751831
+    ],
+    "initial_wrong_examples": 58,
+    "error_correction_rate": 0.0,
+    "error_amplification_rate": 0.0,
+    "error_amplification_delta": 0.1
+  },
+  "reverse_off_test": {
+    "loss": 2.712230682373047,
+    "accuracy": 0.09375,
+    "examples": 64.0,
+    "seconds": 0.1371498980006436,
+    "examples_per_second": 466.6427094222095
+  },
+  "reverse_off_refinement": {
+    "iteration_accuracy": [
+      0.09375,
+      0.09375,
+      0.09375
+    ],
+    "iteration_confidence": [
+      0.1661062240600586,
+      0.1661062240600586,
+      0.1661062240600586
+    ],
+    "iteration_entropy": [
+      2.1356518268585205,
+      2.1356518268585205,
+      2.1356518268585205
+    ],
+    "initial_wrong_examples": 58,
+    "error_correction_rate": 0.0,
+    "error_amplification_rate": 0.0,
+    "error_amplification_delta": 0.1
+  },
+  "reverse_accuracy_drop": 0.0,
+  "wall_time_seconds": 2.8990088240007026,
+  "peak_memory_bytes": 4745923072,
+  "synthetic_data": false
+}

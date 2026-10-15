@@ -190,10 +190,16 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
 
     training_model = model
     if context.enabled:
+        # A finite Jacobi unroll can leave early-cell exchange parameters outside
+        # the loss graph.  With the registered two training sweeps, information
+        # from cells 0--2 cannot reach the terminal classifier in the same
+        # forward pass, so DDP must tolerate those intentionally unused tensors.
+        # This only changes gradient bookkeeping; it does not change the model
+        # update or any arm's numerical forward pass.
         training_model = DistributedDataParallel(
             model,
             device_ids=[device.index] if device.type == "cuda" else None,
-            find_unused_parameters=not getattr(model, "exchange_enabled", True),
+            find_unused_parameters=True,
         )
     if context.is_main:
         sample = torch.zeros(1, 3, 32, 32, device=device)
@@ -219,6 +225,14 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
         if validation_fixed_steps is not None and "fixed_steps" in forward_parameters
         else None
     )
+    if context.is_main and start_epoch == 0:
+        initial_diagnostics = collect_diagnostics(
+            model, selection_loader, device,
+            max_samples=int(config.get("diagnostics", {}).get("max_samples", 16)),
+            forward_kwargs=validation_forward_kwargs,
+        )
+        if initial_diagnostics:
+            write_json(summarize_diagnostics(initial_diagnostics), output_dir / "initial_diagnostics.json")
     for epoch in range(start_epoch, epochs):
         if hasattr(data.train.sampler, "set_epoch"):
             data.train.sampler.set_epoch(epoch)
@@ -272,6 +286,8 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
             mechanisms = summarize_v5_mechanisms(epoch_diagnostics)
             if mechanisms:
                 row["mechanisms"] = mechanisms
+            if epoch_diagnostics:
+                row["diagnostics"] = summarize_diagnostics(epoch_diagnostics)
         append_jsonl(row, metrics_path)
         mechanism_text = ""
         if "mechanisms" in row:
@@ -310,13 +326,28 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
     best_checkpoint = torch.load(output_dir / "best.pt", map_location=device, weights_only=False)
     model.load_state_dict(best_checkpoint["model_state"])
     supports_fixed_steps = "fixed_steps" in inspect.signature(model.forward).parameters
+    adaptive_test_metrics: dict[str, Any] = {}
+    validation_refinement: dict[str, Any] = {}
     if supports_fixed_steps and args.limit_eval_batches is None:
-        test_metrics = evaluate_adaptive_solver(model, data.test, criterion, device)
+        # Primary accuracy and reverse-off use the identical fixed budget.
+        # Adaptive inference is one separate final-test pass for step statistics.
+        test_metrics = evaluate(
+            model, data.test, criterion, device,
+            forward_kwargs=validation_forward_kwargs,
+        )
+        adaptive_test_metrics = evaluate_adaptive_solver(model, data.test, criterion, device)
         curve_steps = tuple(
             int(step)
             for step in evaluation_config.get("iteration_steps", (1, 2, 4, 8))
         )
         refinement_metrics = evaluate_iteration_budgets(
+            model,
+            data.test,
+            device,
+            steps=curve_steps,
+            max_samples=len(data.test.dataset),
+        )
+        validation_refinement = evaluate_iteration_budgets(
             model,
             selection_loader,
             device,
@@ -404,7 +435,9 @@ def _train(args: argparse.Namespace, config: dict[str, Any], context: Distribute
         "flops_approx": architecture_profile["flops_approx"],
         "best_selection_accuracy": best_accuracy,
         "test": test_metrics,
+        "adaptive_test": adaptive_test_metrics,
         "refinement": refinement_metrics,
+        "validation_refinement": validation_refinement,
         "reverse_off_test": reverse_off_metrics,
         "reverse_off_refinement": reverse_off_refinement,
         "reverse_accuracy_drop": (
